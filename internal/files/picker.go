@@ -22,10 +22,7 @@ type chooser struct {
 }
 
 // choosers are the supported native dialogs, tried in order — the first one on
-// PATH wins.
-//
-// ponytail: Linux desktop dialogs only. Add osascript (macOS) / PowerShell
-// (Windows) entries here if lazyovpn ever leaves Linux.
+// PATH wins. Linux desktop dialogs only.
 var choosers = []chooser{
 	{"zenity", []string{
 		"--file-selection",

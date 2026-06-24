@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-go run .              # launch the TUI (needs .ovpn/.conf in /etc/openvpn* or ~/.config/lazyovpn)
+go run .              # launch the TUI (discovers configs in /etc/openvpn* + ~/.config/lazyovpn/connections)
 go build ./...        # build
 go vet ./...          # static check
 gofmt -w <file>       # format (mandatory before considering work done)
@@ -29,6 +29,7 @@ internal/files/copy.go           generic Copy(src, dst, perm)
 internal/vpn/vpn.go              config discovery + import, auth detection, privileged openvpn process management
 internal/tui/tui.go              root model: global state, layout, key routing, mode switch, composition
 internal/tui/components/box.go   reusable TitledBox (title inlined into the top border)
+internal/tui/components/overlay.go Overlay/Center: lipgloss v2 layer compositing for floating popups
 internal/tui/components/theme.go shared color palette + Hint style
 internal/tui/utils/stream.go     shared plumbing: LogMsg/LogClosedMsg/WaitForLog
 internal/tui/utils/picker.go     bubbletea glue for the file chooser: PickFile cmd + FilePickedMsg
@@ -50,16 +51,16 @@ bordered box; the root only places panels and routes messages.
 
 ### `internal/files` — OS file helpers
 
-- `Pick()` resolves the first installed native file-chooser dialog (`zenity`, then `kdialog`) and runs it, returning the chosen path, `ErrCanceled`, or `ErrNoChooser`. It's a separate GUI window, so it blocks — run it off the UI goroutine (`utils.PickFile` does). Linux desktop dialogs only (`ponytail:` marks the macOS/Windows extension point).
+- `Pick()` resolves the first installed native file-chooser dialog (`zenity`, then `kdialog`) and runs it, returning the chosen path, `ErrCanceled`, or `ErrNoChooser`. It's a separate GUI window, so it blocks — run it off the UI goroutine (`utils.PickFile` does). Linux desktop dialogs only.
 - `Copy(src, dst, perm)` is a generic file copy that forces `dst`'s mode to `perm` (so re-copies stay private).
 
 ### `internal/vpn` — process management
 
-- `Manager` holds **one** active connection (`ponytail:` comment marks the upgrade path to multi-connection).
+- `Manager` holds **one** active connection at a time.
 - `Connect(c, username, password)` spawns `openvpn` via `pkexec` and wires the child's combined stdout+stderr through an `os.Pipe` into a **`<-chan string`** of log lines, returned to the caller. A single scanner goroutine owns the channel and is the **only** caller of `cmd.Wait()` (reaper).
 - **Discovery + import**: `Discover()` scans the system dirs (`/etc/openvpn/client`, `/etc/openvpn`) plus `ConnectionsDir()` (`~/.config/lazyovpn/connections`, the default home for user-added configs). `ImportConfig(src)` validates the `.ovpn/.conf` extension, copies the file into `ConnectionsDir()` at 0600 (configs can carry inline keys), and returns the new `Config`.
-- **Auth**: `NeedsAuth(c)` reports whether a config has a bare `auth-user-pass` directive (no creds file → needs a prompt). When credentials are supplied, `Connect` writes them to a 0600 temp file on tmpfs (`$XDG_RUNTIME_DIR`), passes it via `--auth-user-pass`, and removes it when the connection ends — the password is never persisted to durable storage (`ponytail:` ceiling notes the same-user read window).
-- Teardown is **async**: `stop()` only `Kill`s and closes a `done` channel; the scanner goroutine reaps on EOF. Switching connections can briefly overlap two `openvpn` processes (documented `ponytail:` ceiling).
+- **Auth**: `NeedsAuth(c)` reports whether a config has a bare `auth-user-pass` directive (no creds file → needs a prompt). When credentials are supplied, `Connect` writes them to a 0600 temp file on tmpfs (`$XDG_RUNTIME_DIR`), passes it via `--auth-user-pass`, and removes it when the connection ends — the password is never persisted to durable storage.
+- Teardown is **async**: `stop()` only `Kill`s and closes a `done` channel; the scanner goroutine reaps on EOF. Switching connections can briefly overlap two `openvpn` processes.
 
 ### `internal/tui` — root model + panels
 
@@ -93,7 +94,7 @@ commit-grouped changelog. To cut a version:
 - [ ] (Optional, local dry run) `goreleaser release --snapshot --clean`.
 - [ ] Tag `vX.Y.Z` and push it — the workflow does the rest.
 
-## Known ceilings (search `ponytail:`)
+## Known ceilings
 
 - Single connection only.
 - `pkexec` hard-coded (no `sudo` fallback).
@@ -101,4 +102,4 @@ commit-grouped changelog. To cut a version:
 - A self-exiting openvpn leaves `Manager.active` non-nil until the next connect/disconnect.
 - Auth is `auth-user-pass` (username + password) only — no key-passphrase (`askpass`) prompt, no saved/remembered credentials.
 - Creds temp file lives for the whole connection on tmpfs (same-user read window); tighten to a FIFO / delete-after-read if it matters.
-- File chooser is Linux desktop dialogs only (`zenity`/`kdialog`); needs a display. No macOS/Windows branch and no in-TUI picker fallback.
+- File chooser is Linux desktop dialogs only (`zenity`/`kdialog`); needs a display, with no in-TUI picker fallback.

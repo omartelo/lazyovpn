@@ -32,7 +32,7 @@ const logBufferLines = 100
 
 // Manager holds the active connection. Only one at a time.
 //
-// ponytail: single global connection. Make it map[name]*exec.Cmd if multi-connection matters.
+// Single global connection. Make it map[name]*exec.Cmd if multi-connection matters.
 type Manager struct {
 	mu     sync.Mutex
 	active *exec.Cmd
@@ -141,8 +141,8 @@ func NeedsAuth(c Config) (bool, error) {
 // writeCredsFile writes username/password to a private, RAM-backed temp file for
 // openvpn's --auth-user-pass. The caller removes it once the process is done.
 //
-// ponytail: the file lives for the whole connection on tmpfs (0600, removed on
-// exit). Tighten to a FIFO / delete-after-read if the same-user read window matters.
+// The file lives for the whole connection on tmpfs (0600, removed on exit).
+// Tighten to a FIFO / delete-after-read if the same-user read window matters.
 func writeCredsFile(username, password string) (string, error) {
 	dir := os.Getenv("XDG_RUNTIME_DIR") // tmpfs, user-owned (/run/user/UID)
 	if dir == "" {
@@ -172,7 +172,7 @@ func writeCredsFile(username, password string) (string, error) {
 // credentials file passed via --auth-user-pass; the file is removed when the
 // connection ends and is never persisted to durable storage.
 //
-// ponytail: pkexec hard-coded. Fall back to sudo if pkexec is gone — add when someone needs it.
+// pkexec hard-coded. Fall back to sudo if pkexec is gone — add when someone needs it.
 func (m *Manager) Connect(c Config, username, password string) (<-chan string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -215,8 +215,8 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	m.active = cmd
 	m.done = done
 
-	// ponytail: switching connections tears down the previous one async — brief overlap
-	// of two openvpn processes. Add synchronous teardown if they fight over routes.
+	// Switching connections tears down the previous one async — brief overlap of two
+	// openvpn processes. Add synchronous teardown if they fight over routes.
 	go func() {
 		defer close(logs)
 		if credsPath != "" {
