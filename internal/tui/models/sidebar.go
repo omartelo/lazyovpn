@@ -22,10 +22,9 @@ func (i item) Description() string { return i.Path }
 func (i item) FilterValue() string { return i.Name }
 
 var (
-	dotStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))             // green ● marker
-	itemSelected  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true) // pink cursor row
-	itemConnected = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))             // green connected row
-	itemNormal    = lipgloss.NewStyle()
+	connectedStyle = lipgloss.NewStyle().Foreground(components.Connected)         // green ● marker + connected row
+	itemSelected   = lipgloss.NewStyle().Foreground(components.Accent).Bold(true) // pink cursor row
+	itemNormal     = lipgloss.NewStyle()
 )
 
 // connDelegate renders one connection per row: a green ● prefix and green text
@@ -47,7 +46,7 @@ func (d connDelegate) Render(w io.Writer, m list.Model, index int, li list.Item)
 
 	marker := "  " // keep names aligned whether or not the dot is shown
 	if connected {
-		marker = dotStyle.Render("●") + " "
+		marker = connectedStyle.Render("●") + " "
 	}
 
 	style := itemNormal
@@ -55,7 +54,7 @@ func (d connDelegate) Render(w io.Writer, m list.Model, index int, li list.Item)
 	case index == m.Index():
 		style = itemSelected
 	case connected:
-		style = itemConnected
+		style = connectedStyle
 	}
 
 	line := lipgloss.NewStyle().MaxWidth(m.Width()).Render(marker + style.Render(it.Name))

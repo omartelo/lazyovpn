@@ -25,18 +25,18 @@ const (
 
 // Badge renders the colored status indicator for a state.
 func (s ConnState) Badge() string {
-	label, color := "idle", "240"
+	label, color := "idle", components.Muted
 	switch s {
 	case StateConnecting:
-		label, color = "connecting...", "214"
+		label, color = "connecting...", components.Warn
 	case StateConnected:
-		label, color = "connected", "42"
+		label, color = "connected", components.Connected
 	case StateDisconnected:
-		label, color = "disconnected", "240"
+		label, color = "disconnected", components.Muted
 	case StateError:
-		label, color = "error", "196"
+		label, color = "error", components.Danger
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render("● " + label)
+	return lipgloss.NewStyle().Foreground(color).Bold(true).Render("● " + label)
 }
 
 // Terminal is the output panel: per-connection log buffers, a viewport, and connection state.

@@ -11,9 +11,9 @@ import (
 // lazydocker style. lipgloss has no native border title, so we build it by hand.
 // content is padded/truncated to exactly innerW x innerH.
 func TitledBox(title, content string, innerW, innerH int, focused bool) string {
-	borderC, titleC := lipgloss.Color("240"), lipgloss.Color("252")
+	borderC, titleC := Muted, Title
 	if focused {
-		borderC, titleC = lipgloss.Color("205"), lipgloss.Color("205")
+		borderC, titleC = Accent, Accent
 	}
 	bs := lipgloss.NewStyle().Foreground(borderC)
 	ts := lipgloss.NewStyle().Foreground(titleC).Bold(true)

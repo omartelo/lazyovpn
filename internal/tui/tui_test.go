@@ -15,17 +15,17 @@ func TestDims(t *testing.T) {
 	m := model{w: 100, h: 30}
 	sideW, sideH, outW, outH := m.dims()
 
-	if sideW != sidebarWidth-4 {
-		t.Errorf("sideW = %d, want %d", sideW, sidebarWidth-4)
+	if sideW != sidebarWidth-paneChromeW {
+		t.Errorf("sideW = %d, want %d", sideW, sidebarWidth-paneChromeW)
 	}
-	if outW != 100-sidebarWidth-4 {
-		t.Errorf("outW = %d, want %d", outW, 100-sidebarWidth-4)
+	if outW != 100-sidebarWidth-paneChromeW {
+		t.Errorf("outW = %d, want %d", outW, 100-sidebarWidth-paneChromeW)
 	}
 	if sideH != outH {
 		t.Errorf("sideH (%d) != outH (%d), panes must match height", sideH, outH)
 	}
-	if sideH != 30-2-2 {
-		t.Errorf("sideH = %d, want %d", sideH, 30-2-2)
+	if sideH != 30-footerRows-paneChromeH {
+		t.Errorf("sideH = %d, want %d", sideH, 30-footerRows-paneChromeH)
 	}
 }
 

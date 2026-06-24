@@ -3,15 +3,15 @@ package models
 import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/components"
 )
 
 const (
-	authInnerW = 46
-	authInnerH = 5
-	inputWidth = 34
+	authInnerW    = 46  // modal inner width (inside the box border)
+	authInnerH    = 5   // modal inner height: 2 fields + hint line
+	inputWidth    = 34  // text input width (leaves room for the "user: " prompt)
+	credCharLimit = 128 // max length accepted for username/password
 )
 
 // AuthModal is the credential prompt shown when a connection needs a
@@ -28,13 +28,13 @@ func NewAuthModal() AuthModal {
 	u := textinput.New()
 	u.Placeholder = "username"
 	u.Prompt = "user: "
-	u.CharLimit = 128
+	u.CharLimit = credCharLimit
 	u.SetWidth(inputWidth)
 
 	p := textinput.New()
 	p.Placeholder = "password"
 	p.Prompt = "pass: "
-	p.CharLimit = 128
+	p.CharLimit = credCharLimit
 	p.SetWidth(inputWidth)
 	p.EchoMode = textinput.EchoPassword
 	p.EchoCharacter = '•'
@@ -98,7 +98,7 @@ func (a AuthModal) Password() string { return a.password.Value() }
 
 // View renders the modal box. The root composites it over the main view.
 func (a AuthModal) View() string {
-	hint := lipgloss.NewStyle().Faint(true).Render("enter: connect · tab: switch · esc: cancel")
+	hint := components.Hint.Render("enter: connect · tab: switch · esc: cancel")
 	body := a.username.View() + "\n\n" + a.password.View() + "\n" + hint
 	return components.TitledBox("auth — "+a.connName, body, authInnerW, authInnerH, true)
 }

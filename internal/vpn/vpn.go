@@ -23,14 +23,17 @@ type Config struct {
 	Path string
 }
 
+// logBufferLines is the buffered capacity of a connection's log channel — enough
+// to absorb openvpn's startup burst without blocking the scanner goroutine.
+const logBufferLines = 100
+
 // Manager holds the active connection. Only one at a time.
 //
 // ponytail: single global connection. Make it map[name]*exec.Cmd if multi-connection matters.
 type Manager struct {
-	mu      sync.Mutex
-	active  *exec.Cmd
-	current string
-	done    chan struct{} // closed when the current connection is torn down
+	mu     sync.Mutex
+	active *exec.Cmd
+	done   chan struct{} // closed when the current connection is torn down
 }
 
 func NewManager() *Manager { return &Manager{} }
@@ -170,10 +173,9 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	}
 	pw.Close() // the child kept its own copy of the fd
 
-	logs := make(chan string, 100)
+	logs := make(chan string, logBufferLines)
 	done := make(chan struct{})
 	m.active = cmd
-	m.current = c.Name
 	m.done = done
 
 	// ponytail: switching connections tears down the previous one async — brief overlap
@@ -214,13 +216,5 @@ func (m *Manager) stop() {
 	close(m.done)
 	_ = m.active.Process.Kill()
 	m.active = nil
-	m.current = ""
 	m.done = nil
-}
-
-// Current returns the name of the connected config, or "" if disconnected.
-func (m *Manager) Current() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.current
 }

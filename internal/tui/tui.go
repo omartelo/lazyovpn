@@ -13,11 +13,21 @@ import (
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
-const sidebarWidth = 42
+const (
+	sidebarWidth = 42 // sidebar pane outer width in columns
+
+	// paneChromeW/H are the cells a components.TitledBox adds around its inner
+	// content: left+right border+padding (4) and top+bottom border (2). dims()
+	// subtracts them to get each pane's inner content size.
+	paneChromeW = 4
+	paneChromeH = 2
+
+	footerRows = 2 // rows reserved below the panes: status line + help line
+)
 
 var (
-	helpStyle = lipgloss.NewStyle().Faint(true).Padding(0, 1)
-	nameStyle = lipgloss.NewStyle().Faint(true)
+	helpStyle = components.Hint.Padding(0, 1)
+	nameStyle = components.Hint
 )
 
 // helpKeys is the keybinding footer, lazydocker style.
@@ -177,7 +187,7 @@ func (m *model) syncSidebar() {
 	}
 }
 
-// layout recomputes pane sizes. Reserves 2 rows: status + help.
+// layout recomputes pane sizes. Reserves footerRows below the panes.
 func (m *model) layout(w, h int) {
 	m.w, m.h = w, h
 	sideW, sideH, outW, outH := m.dims()
@@ -191,10 +201,10 @@ func (m *model) layout(w, h int) {
 
 // dims returns the inner content size of each pane (excluding border + padding).
 func (m model) dims() (sideW, sideH, outW, outH int) {
-	bodyH := m.h - 2 // status + help rows
-	sideW = max(sidebarWidth-4, 1)
-	outW = max(m.w-sidebarWidth-4, 1)
-	sideH = max(bodyH-2, 1) // top + bottom border
+	bodyH := m.h - footerRows
+	sideW = max(sidebarWidth-paneChromeW, 1)
+	outW = max(m.w-sidebarWidth-paneChromeW, 1)
+	sideH = max(bodyH-paneChromeH, 1)
 	outH = sideH
 	return
 }
