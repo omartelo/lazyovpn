@@ -31,7 +31,7 @@ var (
 )
 
 // helpKeys is the keybinding footer, lazydocker style.
-const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · d: disconnect · q: quit"
+const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · a: add · d: disconnect · q: quit"
 
 // appMode is the top-level interaction mode.
 type appMode int
@@ -39,12 +39,14 @@ type appMode int
 const (
 	modeNormal appMode = iota
 	modeAuth           // credential modal is capturing input
+	modeAdd            // import-connection modal is open
 )
 
 type model struct {
 	sidebar    models.Sidebar
 	terminal   models.Terminal
 	auth       models.AuthModal
+	add        models.AddModal
 	mode       appMode
 	pending    vpn.Config // connection awaiting credentials
 	mgr        *vpn.Manager
@@ -59,6 +61,7 @@ func New(configs []vpn.Config, mgr *vpn.Manager) model {
 		sidebar:  models.NewSidebar(configs),
 		terminal: models.NewTerminal(),
 		auth:     models.NewAuthModal(),
+		add:      models.NewAddModal(),
 		mgr:      mgr,
 	}
 }
@@ -89,9 +92,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// The credential modal owns all other input while open.
-	if m.mode == modeAuth {
+	// An open modal owns all other input while it is up.
+	switch m.mode {
+	case modeAuth:
 		return m.updateAuth(msg)
+	case modeAdd:
+		return m.updateAdd(msg)
 	}
 
 	if key, ok := msg.(tea.KeyPressMsg); ok && !m.sidebar.Filtering() {
@@ -99,6 +105,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			_ = m.mgr.Disconnect()
 			return m, tea.Quit
+		case "a":
+			m.mode = modeAdd
+			return m, m.add.Open()
 		case "enter":
 			return m.enter()
 		case "d":
@@ -140,6 +149,43 @@ func (m model) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.auth, cmd = m.auth.Update(msg)
 	return m, cmd
+}
+
+// updateAdd handles input while the import-connection modal is open.
+func (m model) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.add.Reset()
+			m.mode = modeNormal
+			return m, nil
+		case "r":
+			return m, m.add.Open() // launch the chooser again
+		case "enter":
+			return m.addConfirm()
+		}
+	}
+	var cmd tea.Cmd
+	m.add, cmd = m.add.Update(msg) // records the file-chooser result
+	return m, cmd
+}
+
+// addConfirm imports the picked file into the connections dir and appends it to
+// the sidebar. Stays open on error so the user can pick again.
+func (m model) addConfirm() (tea.Model, tea.Cmd) {
+	path := m.add.Path()
+	if path == "" {
+		return m, nil // nothing picked yet
+	}
+	cfg, err := vpn.ImportConfig(path)
+	if err != nil {
+		m.add.SetError(err.Error())
+		return m, nil
+	}
+	m.sidebar.AddConfig(cfg)
+	m.add.Reset()
+	m.mode = modeNormal
+	return m, nil
 }
 
 // enter connects the selected config, prompting for credentials first if needed.
@@ -217,8 +263,11 @@ func (m model) View() tea.View {
 	left := m.sidebar.View(true) // sidebar is the focused pane
 	right := m.terminal.View(false)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	if m.mode == modeAuth {
-		body = components.Center(body, m.auth.View()) // popup floating over the view
+	switch m.mode { // popup floating over the view
+	case modeAuth:
+		body = components.Center(body, m.auth.View())
+	case modeAdd:
+		body = components.Center(body, m.add.View())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys))
 }

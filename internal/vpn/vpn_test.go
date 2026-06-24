@@ -15,6 +15,50 @@ func writeConfig(t *testing.T, content string) Config {
 	return Config{Name: "c", Path: path}
 }
 
+func TestImportConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	src := filepath.Join(t.TempDir(), "myvpn.ovpn")
+	if err := os.WriteFile(src, []byte("client\nremote x 1194\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := ImportConfig(src)
+	if err != nil {
+		t.Fatalf("ImportConfig error: %v", err)
+	}
+
+	want := filepath.Join(home, ".config", "lazyovpn", "connections", "myvpn.ovpn")
+	if cfg.Path != want {
+		t.Errorf("Path = %q, want %q", cfg.Path, want)
+	}
+	if cfg.Name != "myvpn" {
+		t.Errorf("Name = %q, want myvpn", cfg.Name)
+	}
+
+	data, err := os.ReadFile(cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "client\nremote x 1194\n" {
+		t.Errorf("copied content = %q", got)
+	}
+	if info, _ := os.Stat(cfg.Path); info.Mode().Perm() != 0o600 {
+		t.Errorf("perm = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestImportConfigRejectsNonConfig(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(src, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportConfig(src); err == nil {
+		t.Error("ImportConfig(.txt): want error, got nil")
+	}
+}
+
 func TestNeedsAuth(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/omartelo/lazyovpn/internal/files"
 )
 
-// configDirs are the locations scanned for .ovpn/.conf files, in order.
+// configDirs are the system locations scanned for .ovpn/.conf files, in order.
+// The user's own connections dir (ConnectionsDir) is scanned on top of these.
 var configDirs = []string{
 	"/etc/openvpn/client",
 	"/etc/openvpn",
@@ -38,11 +41,21 @@ type Manager struct {
 
 func NewManager() *Manager { return &Manager{} }
 
-// Discover scans the known directories plus ~/.config/lazyovpn for configs.
+// ConnectionsDir is where lazyovpn stores user-added configs:
+// ~/.config/lazyovpn/connections.
+func ConnectionsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, ".config", "lazyovpn", "connections"), nil
+}
+
+// Discover scans the system directories plus ConnectionsDir for configs.
 func Discover() ([]Config, error) {
 	dirs := configDirs
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".config", "lazyovpn"))
+	if dir, err := ConnectionsDir(); err == nil {
+		dirs = append(dirs, dir)
 	}
 
 	var configs []Config
@@ -72,6 +85,30 @@ func Discover() ([]Config, error) {
 		}
 	}
 	return configs, nil
+}
+
+// ImportConfig copies an .ovpn/.conf file into ConnectionsDir and returns the
+// resulting Config. It rejects anything that is not an OpenVPN config and
+// overwrites an existing file of the same name (re-import updates in place).
+func ImportConfig(srcPath string) (Config, error) {
+	ext := filepath.Ext(srcPath)
+	if ext != ".ovpn" && ext != ".conf" {
+		return Config{}, fmt.Errorf("not an OpenVPN config (.ovpn/.conf): %s", srcPath)
+	}
+	dir, err := ConnectionsDir()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Config{}, fmt.Errorf("create connections dir: %w", err)
+	}
+	base := filepath.Base(srcPath)
+	dst := filepath.Join(dir, base)
+	// 0600: a config can carry inline keys/credentials — keep it private.
+	if err := files.Copy(srcPath, dst, 0o600); err != nil {
+		return Config{}, fmt.Errorf("import config: %w", err)
+	}
+	return Config{Name: strings.TrimSuffix(base, ext), Path: dst}, nil
 }
 
 // NeedsAuth reports whether the config asks for interactive username/password —

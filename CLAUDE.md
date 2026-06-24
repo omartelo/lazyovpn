@@ -24,33 +24,47 @@ The TUI cannot be exercised non-interactively (needs a TTY, a real `.ovpn`, and 
 
 ```
 main.go                          cobra root cmd → discovers configs → launches the Bubble Tea program
-internal/vpn/vpn.go              config discovery, auth detection, privileged openvpn process management
+internal/files/picker.go         native file-chooser (zenity/kdialog) resolution + Pick()
+internal/files/copy.go           generic Copy(src, dst, perm)
+internal/vpn/vpn.go              config discovery + import, auth detection, privileged openvpn process management
 internal/tui/tui.go              root model: global state, layout, key routing, mode switch, composition
 internal/tui/components/box.go   reusable TitledBox (title inlined into the top border)
+internal/tui/components/theme.go shared color palette + Hint style
 internal/tui/utils/stream.go     shared plumbing: LogMsg/LogClosedMsg/WaitForLog
-internal/tui/models/sidebar.go   connection-list panel (bubbles/list + selection/filter)
+internal/tui/utils/picker.go     bubbletea glue for the file chooser: PickFile cmd + FilePickedMsg
+internal/tui/models/sidebar.go   connection-list panel (bubbles/list + selection/filter + AddConfig)
 internal/tui/models/terminal.go  output panel (viewport + per-connection buffers + ConnState/Badge)
 internal/tui/models/authmodal.go credential modal (two textinputs; password masked, never persisted)
+internal/tui/models/addmodal.go  import-connection modal (launches the file chooser, confirms on enter)
 ```
 
 The TUI is split into packages so each panel owns its own state and business
 rules, and new views can be added without touching the others. The import graph
-has no cycles: `components` and `utils` depend on nothing internal; `models`
-depends on `components` (+ `vpn`); the root `tui` package depends on `models`,
-`utils`, and `vpn`. Each panel renders its own bordered box; the root only
-places panels and routes messages.
+has no cycles: `files` (OS file helpers) depends on nothing internal;
+`components` depends on nothing internal; `utils` depends on `files`; `vpn`
+depends on `files`; `models` depends on `components`, `utils`, `vpn`; the root
+`tui` package depends on `models`, `utils`, `vpn`. The split line for files:
+`vpn` knows *what an OpenVPN config is* (discover/import/auth); `files` knows
+*how to talk to the OS about files* (chooser/copy). Each panel renders its own
+bordered box; the root only places panels and routes messages.
+
+### `internal/files` — OS file helpers
+
+- `Pick()` resolves the first installed native file-chooser dialog (`zenity`, then `kdialog`) and runs it, returning the chosen path, `ErrCanceled`, or `ErrNoChooser`. It's a separate GUI window, so it blocks — run it off the UI goroutine (`utils.PickFile` does). Linux desktop dialogs only (`ponytail:` marks the macOS/Windows extension point).
+- `Copy(src, dst, perm)` is a generic file copy that forces `dst`'s mode to `perm` (so re-copies stay private).
 
 ### `internal/vpn` — process management
 
 - `Manager` holds **one** active connection (`ponytail:` comment marks the upgrade path to multi-connection).
 - `Connect(c, username, password)` spawns `openvpn` via `pkexec` and wires the child's combined stdout+stderr through an `os.Pipe` into a **`<-chan string`** of log lines, returned to the caller. A single scanner goroutine owns the channel and is the **only** caller of `cmd.Wait()` (reaper).
+- **Discovery + import**: `Discover()` scans the system dirs (`/etc/openvpn/client`, `/etc/openvpn`) plus `ConnectionsDir()` (`~/.config/lazyovpn/connections`, the default home for user-added configs). `ImportConfig(src)` validates the `.ovpn/.conf` extension, copies the file into `ConnectionsDir()` at 0600 (configs can carry inline keys), and returns the new `Config`.
 - **Auth**: `NeedsAuth(c)` reports whether a config has a bare `auth-user-pass` directive (no creds file → needs a prompt). When credentials are supplied, `Connect` writes them to a 0600 temp file on tmpfs (`$XDG_RUNTIME_DIR`), passes it via `--auth-user-pass`, and removes it when the connection ends — the password is never persisted to durable storage (`ponytail:` ceiling notes the same-user read window).
 - Teardown is **async**: `stop()` only `Kill`s and closes a `done` channel; the scanner goroutine reaps on EOF. Switching connections can briefly overlap two `openvpn` processes (documented `ponytail:` ceiling).
 
 ### `internal/tui` — root model + panels
 
 - Layout: bordered sidebar (`models.Sidebar`) + bordered output pane (`models.Terminal`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
-- **Modes**: the root `model` has an `appMode` (`modeNormal`/`modeAuth`). In `modeAuth` the credential modal (`models.AuthModal`) owns all input except the global log stream; `enter` on a connection that `NeedsAuth` opens the modal, `enter` inside it hands creds to `Connect` and clears them, `esc` cancels. The modal floats over the live view via `components.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
+- **Modes**: the root `model` has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`). An open modal owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` opens the credential modal (`models.AuthModal`), `enter` inside it hands creds to `Connect` and clears them, `esc` cancels. `modeAdd`: `a` opens the import modal (`models.AddModal`), which immediately launches the native file chooser (`utils.PickFile`); when `FilePickedMsg` arrives the modal shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Modals float over the live view via `components.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
 - **Charm v2 stack**: bubbletea, bubbles, and lipgloss are all **v2** (`charm.land/...`). v2 gotchas: `Model.View()` returns a `tea.View` (not a string) — wrap content with the `altView` helper, which also sets `v.AltScreen = true` (alt screen is declarative per-frame in v2, not a `NewProgram` option); key presses arrive as `tea.KeyPressMsg` (`tea.KeyMsg` is now an interface), matched via `.String()`. Compositing for the popup uses lipgloss v2 `Canvas`/`Layer` behind `components.Overlay`/`Center`.
 - **Log streaming**: `utils.WaitForLog(ch)` is a `tea.Cmd` that blocks on the channel and emits `utils.LogMsg`/`utils.LogClosedMsg`; each handler re-issues it to pump the next line.
 - **Per-connection output**: `Terminal.buffers` keeps each connection's log. The active connection keeps filling its buffer even when another is selected; navigating the list (`Terminal.ShowBuffer`) swaps which buffer the viewport shows.
@@ -80,6 +94,7 @@ When cutting a version:
 - Single connection only.
 - `pkexec` hard-coded (no `sudo` fallback).
 - Async teardown → brief two-process overlap on switch.
-- A self-exiting openvpn leaves `Manager.current` stale until the next connect/disconnect.
+- A self-exiting openvpn leaves `Manager.active` non-nil until the next connect/disconnect.
 - Auth is `auth-user-pass` (username + password) only — no key-passphrase (`askpass`) prompt, no saved/remembered credentials.
 - Creds temp file lives for the whole connection on tmpfs (same-user read window); tighten to a FIFO / delete-after-read if it matters.
+- File chooser is Linux desktop dialogs only (`zenity`/`kdialog`); needs a display. No macOS/Windows branch and no in-TUI picker fallback.

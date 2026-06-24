@@ -79,3 +79,22 @@ func TestEnterOpensAuthModal(t *testing.T) {
 		t.Errorf("mode = %v after esc, want modeNormal", got)
 	}
 }
+
+// Pressing "a" opens the import-connection modal; esc closes it. The returned
+// command (the file chooser) is never run here, so no dialog is spawned.
+func TestAddKeyOpensModal(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	mm := out.(model)
+	if mm.mode != modeAdd {
+		t.Fatalf("mode = %v after 'a', want modeAdd", mm.mode)
+	}
+
+	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if got := out.(model).mode; got != modeNormal {
+		t.Errorf("mode = %v after esc, want modeNormal", got)
+	}
+}

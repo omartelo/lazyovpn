@@ -88,6 +88,17 @@ func (s *Sidebar) SetConnected(name string) {
 	s.list.SetDelegate(connDelegate{connectedName: name})
 }
 
+// AddConfig appends a freshly imported config to the list, skipping it if a
+// config with the same path is already listed.
+func (s *Sidebar) AddConfig(c vpn.Config) {
+	for _, li := range s.list.Items() {
+		if existing, ok := li.(item); ok && existing.Path == c.Path {
+			return
+		}
+	}
+	s.list.InsertItem(len(s.list.Items()), item(c))
+}
+
 // SetSize sets the inner content size (inside the border).
 func (s *Sidebar) SetSize(w, h int) {
 	s.w, s.h = w, h

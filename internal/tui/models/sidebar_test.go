@@ -53,6 +53,20 @@ func TestConnDelegateMarksConnected(t *testing.T) {
 	}
 }
 
+func TestSidebarAddConfig(t *testing.T) {
+	s := NewSidebar(sampleConfigs()) // alpha, beta
+	s.AddConfig(vpn.Config{Name: "gamma", Path: "/etc/openvpn/gamma.ovpn"})
+	if got := len(s.list.Items()); got != 3 {
+		t.Fatalf("items = %d after add, want 3", got)
+	}
+
+	// re-adding the same path is a no-op (dedup)
+	s.AddConfig(vpn.Config{Name: "gamma", Path: "/etc/openvpn/gamma.ovpn"})
+	if got := len(s.list.Items()); got != 3 {
+		t.Errorf("items = %d after duplicate add, want 3", got)
+	}
+}
+
 func TestSidebarEmpty(t *testing.T) {
 	s := NewSidebar(nil)
 	if got := s.SelectedName(); got != "" {

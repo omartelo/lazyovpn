@@ -23,9 +23,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if len(configs) == 0 {
-				return fmt.Errorf("no configs found in /etc/openvpn or ~/.config/lazyovpn")
-			}
+			// No configs is fine — the user can import one in the TUI with "a".
 
 			mgr := vpn.NewManager()
 			// v2: alt screen is declarative — set in the model's View(), not here.
