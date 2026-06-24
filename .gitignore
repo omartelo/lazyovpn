@@ -4,5 +4,8 @@
 # GoReleaser output
 /dist/
 
+# Gremlins mutation-test log (written by CI)
+/gremlins.log
+
 # Editor
 .idea/

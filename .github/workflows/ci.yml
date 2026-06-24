@@ -47,3 +47,32 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: install gremlins
+        run: |
+          go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Settings (timeout, workers, efficacy gate) come from .gremlins.yaml.
+      # Gremlins exits non-zero if efficacy is below the threshold.
+      - name: mutation testing
+        run: |
+          set +e
+          gremlins unleash | tee gremlins.log
+          code=${PIPESTATUS[0]}
+          {
+            echo "### Mutation testing"
+            echo '```'
+            grep -E "Killed:|Lived:|Test efficacy:|Mutator coverage:" gremlins.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"

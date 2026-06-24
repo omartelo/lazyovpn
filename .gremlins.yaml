@@ -1,0 +1,15 @@
+# Gremlins mutation testing config. Auto-loaded from the repo root.
+# Run: gremlins unleash
+unleash:
+  # The unit suite is sub-second; with many parallel workers each mutant's
+  # `go test` loses the CPU race and is wrongly flagged TIMED OUT. A high
+  # coefficient (timeout = baseline * coefficient) absorbs that contention so
+  # mutants resolve to KILLED/LIVED instead. Without it the run is flaky.
+  timeout-coefficient: 10
+  workers: 4
+  threshold:
+    # Efficacy = KILLED / (KILLED + LIVED) — quality of the tests over covered
+    # code. NOT-COVERED mutants (headless-only paths: pkexec, GUI, View) are
+    # excluded from this number, so untestable code never drags the gate down.
+    # Gremlins exits non-zero below this, failing CI. Baseline is ~90%.
+    efficacy: 85

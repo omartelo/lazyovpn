@@ -16,7 +16,15 @@ gofmt -w <file>       # format (mandatory before considering work done)
 go test -race ./...   # run all tests
 go test -race -run TestName ./internal/vpn   # run a single test
 go test -cover ./...  # coverage
+gremlins unleash      # mutation testing (config: .gremlins.yaml; install: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0)
 ```
+
+Mutation testing gotchas: `gremlins unleash` does **not** expand `./...` — run it
+with no path (whole module) or a concrete dir (`./internal/vpn`). The very fast
+suite needs `timeout-coefficient` high (set in `.gremlins.yaml`) or mutants get
+wrongly flagged TIMED OUT under CPU contention. The efficacy gate lives in the
+nested `threshold.efficacy` config key (the `--threshold-efficacy` CLI flag is
+silently ignored by the current build).
 
 The TUI cannot be exercised non-interactively (needs a TTY, a real `.ovpn`, and a polkit password prompt) — verify logic with tests + `go build` + `go vet`, and run manually for end-to-end behavior.
 
@@ -73,7 +81,7 @@ bordered box; the root only places panels and routes messages.
 
 ## Hard invariants — never break these
 
-1. **Tests, as much coverage as possible.** Every non-trivial change ships with tests (table-driven, `go test -race`). Aim to cover the maximum of the code you can — logic in `internal/vpn` (config discovery, lifecycle) is fully testable; cover it. Don't ship logic with no test behind it.
+1. **Tests, as much coverage as possible — and they must have teeth.** Every non-trivial change ships with tests (table-driven, `go test -race`). Aim to cover the maximum of the code you can — logic in `internal/vpn` (config discovery, lifecycle) is fully testable; cover it. Don't ship logic with no test behind it. Tests assert observable behavior, not implementation mechanics, so a real regression fails them; **mutation testing (`gremlins unleash`) gates efficacy ≥85% in CI** to catch tautological tests. When a test breaks, fix the code — never rewrite the assertion to pass, unless the test itself encoded wrong behavior.
 2. **The TUI process stays unprivileged.** Only `openvpn` runs as root, spawned via `pkexec`. Never add a "run as root" dependency or escalate the TUI itself — the privilege boundary is the whole design.
 3. **Exactly one `cmd.Wait()` per process** (the scanner goroutine's reaper). A second `Wait` panics.
 4. **Stale-channel guard.** Every `utils.LogMsg`/`utils.LogClosedMsg` carries its source channel; the root handlers drop it if `msg.Ch != m.logCh`. This is what keeps a connection switch from mixing old and new output — keep it on any new log-channel message.
@@ -90,6 +98,7 @@ runs `go test` as a pre-hook, and publishes tar.gz archives + checksums with a
 commit-grouped changelog. To cut a version:
 
 - [ ] `go test -race ./...` passes; `go vet ./...` clean and `gofmt` applied.
+- [ ] `gremlins unleash` passes the efficacy gate (the release workflow blocks on it).
 - [ ] Update `CHANGELOG.md`: move `[Unreleased]` entries under a new `[vX.Y.Z] - DATE` heading and refresh the compare links at the bottom.
 - [ ] (Optional, local dry run) `goreleaser release --snapshot --clean`.
 - [ ] Tag `vX.Y.Z` and push it — the workflow does the rest.

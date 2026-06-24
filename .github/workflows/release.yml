@@ -9,7 +9,27 @@ permissions:
   contents: write # create the GitHub release + upload artifacts
 
 jobs:
+  # Gate the release on mutation-test efficacy (config in .gremlins.yaml).
+  # goreleaser only runs if this passes.
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: install gremlins
+        run: |
+          go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: mutation testing
+        run: gremlins unleash
+
   goreleaser:
+    needs: mutation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
