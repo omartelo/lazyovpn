@@ -23,31 +23,47 @@ The TUI cannot be exercised non-interactively (needs a TTY, a real `.ovpn`, and 
 ## What lives where
 
 ```
-main.go              cobra root cmd → discovers configs → launches the Bubble Tea program
-internal/vpn/vpn.go  config discovery + privileged openvpn process management
-internal/tui/tui.go  Bubble Tea model: sidebar + output viewport, log streaming, state badge
+main.go                          cobra root cmd → discovers configs → launches the Bubble Tea program
+internal/vpn/vpn.go              config discovery, auth detection, privileged openvpn process management
+internal/tui/tui.go              root model: global state, layout, key routing, mode switch, composition
+internal/tui/components/box.go   reusable TitledBox (title inlined into the top border)
+internal/tui/utils/stream.go     shared plumbing: LogMsg/LogClosedMsg/WaitForLog
+internal/tui/models/sidebar.go   connection-list panel (bubbles/list + selection/filter)
+internal/tui/models/terminal.go  output panel (viewport + per-connection buffers + ConnState/Badge)
+internal/tui/models/authmodal.go credential modal (two textinputs; password masked, never persisted)
 ```
+
+The TUI is split into packages so each panel owns its own state and business
+rules, and new views can be added without touching the others. The import graph
+has no cycles: `components` and `utils` depend on nothing internal; `models`
+depends on `components` (+ `vpn`); the root `tui` package depends on `models`,
+`utils`, and `vpn`. Each panel renders its own bordered box; the root only
+places panels and routes messages.
 
 ### `internal/vpn` — process management
 
 - `Manager` holds **one** active connection (`ponytail:` comment marks the upgrade path to multi-connection).
-- `Connect` spawns `openvpn` via `pkexec` and wires the child's combined stdout+stderr through an `os.Pipe` into a **`<-chan string`** of log lines, returned to the caller. A single scanner goroutine owns the channel and is the **only** caller of `cmd.Wait()` (reaper).
+- `Connect(c, username, password)` spawns `openvpn` via `pkexec` and wires the child's combined stdout+stderr through an `os.Pipe` into a **`<-chan string`** of log lines, returned to the caller. A single scanner goroutine owns the channel and is the **only** caller of `cmd.Wait()` (reaper).
+- **Auth**: `NeedsAuth(c)` reports whether a config has a bare `auth-user-pass` directive (no creds file → needs a prompt). When credentials are supplied, `Connect` writes them to a 0600 temp file on tmpfs (`$XDG_RUNTIME_DIR`), passes it via `--auth-user-pass`, and removes it when the connection ends — the password is never persisted to durable storage (`ponytail:` ceiling notes the same-user read window).
 - Teardown is **async**: `stop()` only `Kill`s and closes a `done` channel; the scanner goroutine reaps on EOF. Switching connections can briefly overlap two `openvpn` processes (documented `ponytail:` ceiling).
 
-### `internal/tui` — Bubble Tea model
+### `internal/tui` — root model + panels
 
-- Layout: bordered sidebar (`bubbles/list`) + bordered output pane (`bubbles/viewport`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
-- **Log streaming**: `waitForLog(ch)` is a `tea.Cmd` that blocks on the channel and emits `logMsg`/`logClosedMsg`; each handler re-issues `waitForLog` to pump the next line.
-- **Per-connection output**: `buffers map[string]*strings.Builder` keeps each connection's log. The active connection keeps filling its buffer even when another is selected; navigating the list (`showBuffer`) swaps which buffer the viewport shows.
-- **Connection state**: `connState` badge (`connecting…`→`connected`→`disconnected`/`error`). `connected` is detected by scanning log lines for `connectedMarker` (`"Initialization Sequence Completed"`), openvpn's real tunnel-up signal — not by process start.
+- Layout: bordered sidebar (`models.Sidebar`) + bordered output pane (`models.Terminal`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
+- **Modes**: the root `model` has an `appMode` (`modeNormal`/`modeAuth`). In `modeAuth` the credential modal (`models.AuthModal`) owns all input except the global log stream; `enter` on a connection that `NeedsAuth` opens the modal, `enter` inside it hands creds to `Connect` and clears them, `esc` cancels. The modal floats over the live view via `components.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
+- **Rendering**: lipgloss **v2** (`charm.land/lipgloss/v2`) — used for styling, `JoinHorizontal`, and the layer compositor behind `components.Overlay`/`Center`. lipgloss v1 stays in the tree only transitively (bubbles v1 renders the list/viewport/textinput with it); the two never exchange types, only composed strings.
+- **Log streaming**: `utils.WaitForLog(ch)` is a `tea.Cmd` that blocks on the channel and emits `utils.LogMsg`/`utils.LogClosedMsg`; each handler re-issues it to pump the next line.
+- **Per-connection output**: `Terminal.buffers` keeps each connection's log. The active connection keeps filling its buffer even when another is selected; navigating the list (`Terminal.ShowBuffer`) swaps which buffer the viewport shows.
+- **Connection state**: `models.ConnState` badge (`connecting…`→`connected`→`disconnected`/`error`). `connected` is detected by scanning log lines for `connectedMarker` (`"Initialization Sequence Completed"`), openvpn's real tunnel-up signal — not by process start.
 
 ## Hard invariants — never break these
 
 1. **Tests, as much coverage as possible.** Every non-trivial change ships with tests (table-driven, `go test -race`). Aim to cover the maximum of the code you can — logic in `internal/vpn` (config discovery, lifecycle) is fully testable; cover it. Don't ship logic with no test behind it.
 2. **The TUI process stays unprivileged.** Only `openvpn` runs as root, spawned via `pkexec`. Never add a "run as root" dependency or escalate the TUI itself — the privilege boundary is the whole design.
 3. **Exactly one `cmd.Wait()` per process** (the scanner goroutine's reaper). A second `Wait` panics.
-4. **Stale-channel guard.** Every `logMsg`/`logClosedMsg` carries its source channel; handlers drop it if `msg.ch != m.logCh`. This is what keeps a connection switch from mixing old and new output — keep it on any new log-channel message.
+4. **Stale-channel guard.** Every `utils.LogMsg`/`utils.LogClosedMsg` carries its source channel; the root handlers drop it if `msg.Ch != m.logCh`. This is what keeps a connection switch from mixing old and new output — keep it on any new log-channel message.
 5. **English only.** All code, comments, and user-facing strings are in English. (The user converses in Portuguese; the codebase stays English.)
+6. **Passwords never persist.** Credentials go to a 0600 tmpfs temp file removed when the connection ends, never to durable storage or logs; the modal clears its fields right after handoff. Don't add caching/saving without an explicit decision.
 
 ## Release checklist
 
@@ -65,3 +81,5 @@ When cutting a version:
 - `pkexec` hard-coded (no `sudo` fallback).
 - Async teardown → brief two-process overlap on switch.
 - A self-exiting openvpn leaves `Manager.current` stale until the next connect/disconnect.
+- Auth is `auth-user-pass` (username + password) only — no key-passphrase (`askpass`) prompt, no saved/remembered credentials.
+- Creds temp file lives for the whole connection on tmpfs (same-user read window); tighten to a FIFO / delete-after-read if it matters.

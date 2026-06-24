@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,5 +53,29 @@ func TestStaleLogIgnored(t *testing.T) {
 	}
 	if out.(model).terminal.State().Badge() == "" {
 		t.Error("model corrupted by stale log")
+	}
+}
+
+// A config with a bare auth-user-pass directive opens the credential modal on
+// enter (and esc cancels it) — without spawning openvpn.
+func TestEnterOpensAuthModal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vpn.ovpn")
+	if err := os.WriteFile(path, []byte("client\nauth-user-pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "vpn", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := out.(model)
+	if mm.mode != modeAuth {
+		t.Fatalf("mode = %v after enter on auth config, want modeAuth", mm.mode)
+	}
+
+	out, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := out.(model).mode; got != modeNormal {
+		t.Errorf("mode = %v after esc, want modeNormal", got)
 	}
 }

@@ -4,7 +4,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/components"
 )

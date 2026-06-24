@@ -4,7 +4,7 @@ package components
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // TitledBox draws a rounded box with the title inlined into the top border,

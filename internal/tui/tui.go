@@ -5,8 +5,10 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
+	"charm.land/lipgloss/v2"
+
+	"github.com/omartelo/lazyovpn/internal/tui/components"
 	"github.com/omartelo/lazyovpn/internal/tui/models"
 	"github.com/omartelo/lazyovpn/internal/tui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
@@ -22,9 +24,20 @@ var (
 // helpKeys is the keybinding footer, lazydocker style.
 const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · d: disconnect · q: quit"
 
+// appMode is the top-level interaction mode.
+type appMode int
+
+const (
+	modeNormal appMode = iota
+	modeAuth           // credential modal is capturing input
+)
+
 type model struct {
 	sidebar  models.Sidebar
 	terminal models.Terminal
+	auth     models.AuthModal
+	mode     appMode
+	pending  vpn.Config // connection awaiting credentials
 	mgr      *vpn.Manager
 	logCh    <-chan string // live stream of the active connection
 	w, h     int
@@ -35,6 +48,7 @@ func New(configs []vpn.Config, mgr *vpn.Manager) model {
 	return model{
 		sidebar:  models.NewSidebar(configs),
 		terminal: models.NewTerminal(),
+		auth:     models.NewAuthModal(),
 		mgr:      mgr,
 	}
 }
@@ -42,6 +56,7 @@ func New(configs []vpn.Config, mgr *vpn.Manager) model {
 func (m model) Init() tea.Cmd { return nil }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Global messages: layout and the live log stream flow regardless of mode.
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.layout(msg.Width, msg.Height)
@@ -60,17 +75,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logCh = nil
 		}
 		return m, nil
+	}
 
-	case tea.KeyMsg:
-		if m.sidebar.Filtering() {
-			break // let the filter consume the keys
-		}
-		switch msg.String() {
+	// The credential modal owns all other input while open.
+	if m.mode == modeAuth {
+		return m.updateAuth(msg)
+	}
+
+	if key, ok := msg.(tea.KeyMsg); ok && !m.sidebar.Filtering() {
+		switch key.String() {
 		case "q", "ctrl+c":
 			_ = m.mgr.Disconnect()
 			return m, tea.Quit
 		case "enter":
-			return m.connectSelected()
+			return m.enter()
 		case "d":
 			_ = m.mgr.Disconnect()
 			m.terminal.MarkDisconnected()
@@ -90,12 +108,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) connectSelected() (tea.Model, tea.Cmd) {
+// updateAuth handles input while the credential modal is open.
+func (m model) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.auth.Reset()
+			m.mode = modeNormal
+			return m, nil
+		case "enter":
+			user, pass := m.auth.Username(), m.auth.Password()
+			cfg := m.pending
+			m.auth.Reset() // drop the password as soon as it is handed off
+			m.mode = modeNormal
+			return m.connect(cfg, user, pass)
+		}
+	}
+	var cmd tea.Cmd
+	m.auth, cmd = m.auth.Update(msg)
+	return m, cmd
+}
+
+// enter connects the selected config, prompting for credentials first if needed.
+func (m model) enter() (tea.Model, tea.Cmd) {
 	cfg, ok := m.sidebar.SelectedConfig()
 	if !ok {
 		return m, nil
 	}
-	ch, err := m.mgr.Connect(cfg)
+	needs, err := vpn.NeedsAuth(cfg)
+	if err != nil {
+		m.terminal.SetError(err.Error())
+		return m, nil
+	}
+	if needs {
+		m.pending = cfg
+		m.mode = modeAuth
+		return m, m.auth.Open(cfg.Name)
+	}
+	return m.connect(cfg, "", "")
+}
+
+// connect starts the connection and begins pumping its log stream.
+func (m model) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
+	ch, err := m.mgr.Connect(cfg, username, password)
 	if err != nil {
 		m.terminal.SetError(err.Error())
 		return m, nil
@@ -105,7 +160,7 @@ func (m model) connectSelected() (tea.Model, tea.Cmd) {
 	return m, utils.WaitForLog(ch)
 }
 
-// layout recomputes both pane sizes. Reserves 2 rows: status + help.
+// layout recomputes pane sizes. Reserves 2 rows: status + help.
 func (m *model) layout(w, h int) {
 	m.w, m.h = w, h
 	sideW, sideH, outW, outH := m.dims()
@@ -131,9 +186,13 @@ func (m model) View() string {
 	if !m.terminal.Ready() {
 		return "loading..."
 	}
+
 	left := m.sidebar.View(true) // sidebar is the focused pane
 	right := m.terminal.View(false)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	if m.mode == modeAuth {
+		body = components.Center(body, m.auth.View()) // popup floating over the view
+	}
 	return body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys)
 }
 
