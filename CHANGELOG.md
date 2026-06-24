@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-24
+
+### Added
+
+- Optional credential storage in the OS keyring (Secret Service / libsecret).
+  The auth modal gains a save toggle (`ctrl+s`, off by default); when enabled,
+  the username/password are stored under the `lazyovpn` service. A connection
+  with saved credentials skips the prompt and connects directly. Press `x` in
+  the connection list to forget a saved entry (e.g. after a password change) —
+  a confirmation popup guards the deletion. Credentials still never touch a
+  plaintext file — only the encrypted keyring.
+
 ## [0.1.0] - 2026-06-24
 
 First release — a terminal UI for managing OpenVPN connections on Linux,
@@ -31,5 +43,6 @@ lazydocker-style.
   CI workflow running `gofmt`/`vet`/`go test -race` with coverage on every PR.
 - MIT license and README.
 
-[Unreleased]: https://github.com/omartelo/lazyovpn/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/omartelo/lazyovpn/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/omartelo/lazyovpn/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/omartelo/lazyovpn/releases/tag/v0.1.0

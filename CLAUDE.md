@@ -35,6 +35,7 @@ main.go                          cobra root cmd → discovers configs → launch
 internal/files/picker.go         native file-chooser (zenity/kdialog) resolution + Pick()
 internal/files/copy.go           generic Copy(src, dst, perm)
 internal/vpn/vpn.go              config discovery + import, auth detection, privileged openvpn process management
+internal/vpn/keyring.go          opt-in credential storage in the OS keyring (Save/Load/ForgetCreds)
 internal/tui/tui.go              root model: global state, layout, key routing, mode switch, composition
 internal/tui/components/box.go   reusable TitledBox (title inlined into the top border)
 internal/tui/components/overlay.go Overlay/Center: lipgloss v2 layer compositing for floating popups
@@ -67,13 +68,14 @@ bordered box; the root only places panels and routes messages.
 - `Manager` holds **one** active connection at a time.
 - `Connect(c, username, password)` spawns `openvpn` via `pkexec` and wires the child's combined stdout+stderr through an `os.Pipe` into a **`<-chan string`** of log lines, returned to the caller. A single scanner goroutine owns the channel and is the **only** caller of `cmd.Wait()` (reaper).
 - **Discovery + import**: `Discover()` scans the system dirs (`/etc/openvpn/client`, `/etc/openvpn`) plus `ConnectionsDir()` (`~/.config/lazyovpn/connections`, the default home for user-added configs). `ImportConfig(src)` validates the `.ovpn/.conf` extension, copies the file into `ConnectionsDir()` at 0600 (configs can carry inline keys), and returns the new `Config`.
-- **Auth**: `NeedsAuth(c)` reports whether a config has a bare `auth-user-pass` directive (no creds file → needs a prompt). When credentials are supplied, `Connect` writes them to a 0600 temp file on tmpfs (`$XDG_RUNTIME_DIR`), passes it via `--auth-user-pass`, and removes it when the connection ends — the password is never persisted to durable storage.
+- **Auth**: `NeedsAuth(c)` reports whether a config has a bare `auth-user-pass` directive (no creds file → needs a prompt). When credentials are supplied, `Connect` writes them to a 0600 temp file on tmpfs (`$XDG_RUNTIME_DIR`), passes it via `--auth-user-pass`, and removes it when the connection ends — the password is never written to a plaintext file on durable storage.
+- **Saved credentials (opt-in)**: `keyring.go` wraps `github.com/zalando/go-keyring` (Secret Service / libsecret on Linux, pure-Go D-Bus, no cgo). `SaveCreds(name, user, pass)` stores `"user\npass"` under service `lazyovpn`; `LoadCreds(name)` returns `(user, pass, ok, err)` — `ok=false` with nil err when nothing is stored; `ForgetCreds(name)` deletes (missing is a no-op). Saving is only ever triggered by the modal's explicit save toggle. Keyring calls run **inline** on the UI goroutine — fine while the login keyring is unlocked (the usual case); move to a `tea.Cmd` if a locked keyring ever hangs the UI. Tested via `keyring.MockInit()`.
 - Teardown is **async**: `stop()` only `Kill`s and closes a `done` channel; the scanner goroutine reaps on EOF. Switching connections can briefly overlap two `openvpn` processes.
 
 ### `internal/tui` — root model + panels
 
 - Layout: bordered sidebar (`models.Sidebar`) + bordered output pane (`models.Terminal`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
-- **Modes**: the root `model` has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`). An open modal owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` opens the credential modal (`models.AuthModal`), `enter` inside it hands creds to `Connect` and clears them, `esc` cancels. `modeAdd`: `a` opens the import modal (`models.AddModal`), which immediately launches the native file chooser (`utils.PickFile`); when `FilePickedMsg` arrives the modal shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Modals float over the live view via `components.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
+- **Modes**: the root `model` has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`/`modeForget`). An open modal owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` first tries `vpn.LoadCreds` — saved creds skip the prompt and connect straight away; otherwise the credential modal (`models.AuthModal`) opens. Inside it, `enter` hands creds to `Connect` and clears them (and, if the save toggle is on — `ctrl+s` — calls `vpn.SaveCreds` best-effort first), `esc` cancels. `modeForget`: in normal mode `x` on a connection with saved creds opens a confirm popup (`forgetView`, no sub-model — rendered inline); `y`/`enter` calls `vpn.ForgetCreds`, `n`/`esc` backs out. With nothing stored `x` is a no-op (no popup). `modeAdd`: `a` opens the import modal (`models.AddModal`), which immediately launches the native file chooser (`utils.PickFile`); when `FilePickedMsg` arrives the modal shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Modals float over the live view via `components.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
 - **Charm v2 stack**: bubbletea, bubbles, and lipgloss are all **v2** (`charm.land/...`). v2 gotchas: `Model.View()` returns a `tea.View` (not a string) — wrap content with the `altView` helper, which also sets `v.AltScreen = true` (alt screen is declarative per-frame in v2, not a `NewProgram` option); key presses arrive as `tea.KeyPressMsg` (`tea.KeyMsg` is now an interface), matched via `.String()`. Compositing for the popup uses lipgloss v2 `Canvas`/`Layer` behind `components.Overlay`/`Center`.
 - **Log streaming**: `utils.WaitForLog(ch)` is a `tea.Cmd` that blocks on the channel and emits `utils.LogMsg`/`utils.LogClosedMsg`; each handler re-issues it to pump the next line.
 - **Per-connection output**: `Terminal.buffers` keeps each connection's log. The active connection keeps filling its buffer even when another is selected; navigating the list (`Terminal.ShowBuffer`) swaps which buffer the viewport shows.
@@ -86,7 +88,7 @@ bordered box; the root only places panels and routes messages.
 3. **Exactly one `cmd.Wait()` per process** (the scanner goroutine's reaper). A second `Wait` panics.
 4. **Stale-channel guard.** Every `utils.LogMsg`/`utils.LogClosedMsg` carries its source channel; the root handlers drop it if `msg.Ch != m.logCh`. This is what keeps a connection switch from mixing old and new output — keep it on any new log-channel message.
 5. **English only.** All code, comments, and user-facing strings are in English. (The user converses in Portuguese; the codebase stays English.)
-6. **Passwords never persist.** Credentials go to a 0600 tmpfs temp file removed when the connection ends, never to durable storage or logs; the modal clears its fields right after handoff. Don't add caching/saving without an explicit decision.
+6. **Passwords never touch plaintext storage.** During a connection, credentials go to a 0600 tmpfs temp file removed when the connection ends, never to a plaintext file on durable storage or to logs; the modal clears its fields right after handoff. The **only** allowed persistence is the OS keyring (Secret Service / libsecret), and **only** when the user explicitly opts in via the modal's save toggle (`internal/vpn/keyring.go`). Never write creds anywhere else, and never default the save toggle to on.
 
 ## Release checklist
 
@@ -109,6 +111,6 @@ commit-grouped changelog. To cut a version:
 - `pkexec` hard-coded (no `sudo` fallback).
 - Async teardown → brief two-process overlap on switch.
 - A self-exiting openvpn leaves `Manager.active` non-nil until the next connect/disconnect.
-- Auth is `auth-user-pass` (username + password) only — no key-passphrase (`askpass`) prompt, no saved/remembered credentials.
+- Auth is `auth-user-pass` (username + password) only — no key-passphrase (`askpass`) prompt. Credentials can be saved to the OS keyring (opt-in); there is no per-config TTL/expiry on a saved entry — it lives until `x` forgets it.
 - Creds temp file lives for the whole connection on tmpfs (same-user read window); tighten to a FIFO / delete-after-read if it matters.
 - File chooser is Linux desktop dialogs only (`zenity`/`kdialog`); needs a display, with no in-TUI picker fallback.

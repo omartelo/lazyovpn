@@ -23,6 +23,9 @@ const (
 	paneChromeH = 2
 
 	footerRows = 2 // rows reserved below the panes: status line + help line
+
+	forgetInnerW = 54 // confirm-forget popup inner width
+	forgetInnerH = 4  // confirm-forget popup inner height: prompt + name + hint
 )
 
 var (
@@ -31,7 +34,7 @@ var (
 )
 
 // helpKeys is the keybinding footer, lazydocker style.
-const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · a: add · d: disconnect · q: quit"
+const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · a: add · d: disconnect · x: forget creds · q: quit"
 
 // appMode is the top-level interaction mode.
 type appMode int
@@ -40,6 +43,7 @@ const (
 	modeNormal appMode = iota
 	modeAuth           // credential modal is capturing input
 	modeAdd            // import-connection modal is open
+	modeForget         // confirm forgetting saved credentials
 )
 
 type model struct {
@@ -49,6 +53,7 @@ type model struct {
 	add        models.AddModal
 	mode       appMode
 	pending    vpn.Config // connection awaiting credentials
+	forgetName string     // connection whose saved creds the forget modal targets
 	mgr        *vpn.Manager
 	logCh      <-chan string // live stream of the active connection
 	markedConn string        // connection currently flagged connected in the sidebar
@@ -98,6 +103,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateAuth(msg)
 	case modeAdd:
 		return m.updateAdd(msg)
+	case modeForget:
+		return m.updateForget(msg)
 	}
 
 	if key, ok := msg.(tea.KeyPressMsg); ok && !m.sidebar.Filtering() {
@@ -115,6 +122,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminal.MarkDisconnected()
 			m.logCh = nil
 			m.syncSidebar()
+			return m, nil
+		case "x":
+			// Forget saved creds for the selected connection (e.g. after a
+			// password change) so the next connect prompts again. Only ask when
+			// there is actually something stored — no popup for a no-op.
+			if cfg, ok := m.sidebar.SelectedConfig(); ok {
+				if _, _, has, _ := vpn.LoadCreds(cfg.Name); has {
+					m.forgetName = cfg.Name
+					m.mode = modeForget
+				}
+			}
 			return m, nil
 		}
 	}
@@ -140,9 +158,14 @@ func (m model) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			user, pass := m.auth.Username(), m.auth.Password()
+			save := m.auth.Save()
 			cfg := m.pending
 			m.auth.Reset() // drop the password as soon as it is handed off
 			m.mode = modeNormal
+			if save {
+				// Best-effort: a keyring write failure must not block the connect.
+				_ = vpn.SaveCreds(cfg.Name, user, pass)
+			}
 			return m.connect(cfg, user, pass)
 		}
 	}
@@ -168,6 +191,25 @@ func (m model) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.add, cmd = m.add.Update(msg) // records the file-chooser result
 	return m, cmd
+}
+
+// updateForget handles the confirm-forget popup. y/enter deletes the saved
+// credentials; n/esc backs out without touching the keyring.
+func (m model) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	switch key.String() {
+	case "y", "enter":
+		_ = vpn.ForgetCreds(m.forgetName)
+		m.forgetName = ""
+		m.mode = modeNormal
+	case "n", "esc":
+		m.forgetName = ""
+		m.mode = modeNormal
+	}
+	return m, nil
 }
 
 // addConfirm imports the picked file into the connections dir and appends it to
@@ -200,6 +242,10 @@ func (m model) enter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if needs {
+		// Saved creds skip the prompt. On any keyring error fall back to asking.
+		if user, pass, ok, err := vpn.LoadCreds(cfg.Name); ok && err == nil {
+			return m.connect(cfg, user, pass)
+		}
 		m.pending = cfg
 		m.mode = modeAuth
 		return m, m.auth.Open(cfg.Name)
@@ -268,6 +314,8 @@ func (m model) View() tea.View {
 		body = components.Center(body, m.auth.View())
 	case modeAdd:
 		body = components.Center(body, m.add.View())
+	case modeForget:
+		body = components.Center(body, m.forgetView())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys))
 }
@@ -278,6 +326,13 @@ func altView(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
+}
+
+// forgetView renders the confirm-forget popup floating over the main view.
+func (m model) forgetView() string {
+	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
+		components.Hint.Render("y/enter: forget · n/esc: cancel")
+	return components.TitledBox("forget credentials", body, forgetInnerW, forgetInnerH, true)
 }
 
 func (m model) statusLine() string {

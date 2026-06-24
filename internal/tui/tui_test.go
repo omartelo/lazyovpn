@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/zalando/go-keyring"
 
 	"github.com/omartelo/lazyovpn/internal/tui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
@@ -128,6 +129,72 @@ func TestAddConfirmImports(t *testing.T) {
 	cfg, ok := m.sidebar.SelectedConfig()
 	if !ok || cfg.Name != "new" {
 		t.Errorf("sidebar config = %+v ok=%v, want name new", cfg, ok)
+	}
+}
+
+// Pressing "x" with no saved credentials is a no-op — the confirm popup only
+// appears when there is actually something to forget.
+func TestForgetNoSavedCredsNoPopup(t *testing.T) {
+	keyring.MockInit()
+
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := out.(model).mode; got != modeNormal {
+		t.Errorf("mode = %v with no saved creds, want modeNormal (no popup)", got)
+	}
+}
+
+// "x" on a connection with saved credentials opens the confirm popup; confirming
+// deletes the keyring entry.
+func TestForgetConfirmDeletes(t *testing.T) {
+	keyring.MockInit()
+	if err := vpn.SaveCreds("vpn", "u", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	mm := out.(model)
+	if mm.mode != modeForget {
+		t.Fatalf("mode = %v after x with saved creds, want modeForget", mm.mode)
+	}
+	if mm.forgetName != "vpn" {
+		t.Errorf("forgetName = %q, want vpn", mm.forgetName)
+	}
+
+	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if got := out.(model).mode; got != modeNormal {
+		t.Errorf("mode = %v after confirm, want modeNormal", got)
+	}
+	if _, _, ok, _ := vpn.LoadCreds("vpn"); ok {
+		t.Error("credentials still present after confirming forget")
+	}
+}
+
+// Cancelling the confirm popup leaves the saved credentials untouched.
+func TestForgetCancelKeeps(t *testing.T) {
+	keyring.MockInit()
+	if err := vpn.SaveCreds("vpn", "u", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})      // open confirm
+	out, _ = out.(model).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
+	if got := out.(model).mode; got != modeNormal {
+		t.Errorf("mode = %v after cancel, want modeNormal", got)
+	}
+	if _, _, ok, _ := vpn.LoadCreds("vpn"); !ok {
+		t.Error("credentials deleted after cancelling forget")
 	}
 }
 

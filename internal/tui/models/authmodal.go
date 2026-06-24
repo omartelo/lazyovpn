@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	authInnerW    = 46  // modal inner width (inside the box border)
-	authInnerH    = 5   // modal inner height: 2 fields + hint line
+	authInnerW    = 64  // modal inner width (inside the box border)
+	authInnerH    = 8   // modal inner height: 2 fields + save line + hint line
 	inputWidth    = 34  // text input width (leaves room for the "user: " prompt)
 	credCharLimit = 128 // max length accepted for username/password
 )
@@ -19,7 +19,8 @@ const (
 type AuthModal struct {
 	username textinput.Model
 	password textinput.Model
-	focus    int // 0 = username, 1 = password
+	focus    int  // 0 = username, 1 = password
+	save     bool // opt-in: persist creds to the OS keyring on submit
 	connName string
 }
 
@@ -48,6 +49,7 @@ func (a *AuthModal) Open(connName string) tea.Cmd {
 	a.username.Reset()
 	a.password.Reset()
 	a.focus = 0
+	a.save = false
 	a.password.Blur()
 	return a.username.Focus()
 }
@@ -59,6 +61,7 @@ func (a *AuthModal) Reset() {
 	a.username.Blur()
 	a.password.Blur()
 	a.focus = 0
+	a.save = false
 }
 
 // Update routes keys to the focused field and toggles focus on tab/arrows.
@@ -68,6 +71,9 @@ func (a AuthModal) Update(msg tea.Msg) (AuthModal, tea.Cmd) {
 		case "tab", "shift+tab", "up", "down":
 			a.toggleFocus()
 			return a, a.focusCmd()
+		case "ctrl+s":
+			a.save = !a.save
+			return a, nil
 		}
 	}
 	var cmd tea.Cmd
@@ -96,9 +102,17 @@ func (a AuthModal) Username() string { return a.username.Value() }
 // Password returns the typed password.
 func (a AuthModal) Password() string { return a.password.Value() }
 
+// Save reports whether the user opted to persist the credentials.
+func (a AuthModal) Save() bool { return a.save }
+
 // View renders the modal box. The root composites it over the main view.
 func (a AuthModal) View() string {
-	hint := components.Hint.Render("enter: connect · tab: switch · esc: cancel")
-	body := a.username.View() + "\n\n" + a.password.View() + "\n" + hint
+	box := "[ ]"
+	if a.save {
+		box = "[x]"
+	}
+	saveLine := box + " save credentials to keyring"
+	hint := components.Hint.Render("enter: connect · ctrl+s: save · tab: switch · esc: cancel")
+	body := a.username.View() + "\n\n" + a.password.View() + "\n\n" + saveLine + "\n\n" + hint
 	return components.TitledBox("auth — "+a.connName, body, authInnerW, authInnerH, true)
 }
