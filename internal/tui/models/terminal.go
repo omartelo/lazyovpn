@@ -3,8 +3,7 @@ package models
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/components"
@@ -65,11 +64,11 @@ func NewTerminal() Terminal {
 func (t *Terminal) SetSize(w, h int) {
 	t.w, t.h = w, h
 	if !t.ready {
-		t.vp = viewport.New(w, h)
+		t.vp = viewport.New() // v2: size via setters, not constructor args
 		t.ready = true
-	} else {
-		t.vp.Width, t.vp.Height = w, h
 	}
+	t.vp.SetWidth(w)
+	t.vp.SetHeight(h)
 }
 
 // Ready reports whether the viewport has been sized at least once.

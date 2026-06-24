@@ -1,7 +1,7 @@
 // Package utils holds shared bubbletea plumbing: the vpn log stream command and messages.
 package utils
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 // LogMsg carries one output line plus its source channel (to drop stale logs).
 type LogMsg struct {

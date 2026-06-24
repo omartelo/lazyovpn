@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
@@ -68,13 +68,13 @@ func TestEnterOpensAuthModal(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(model)
 
-	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	mm := out.(model)
 	if mm.mode != modeAuth {
 		t.Fatalf("mode = %v after enter on auth config, want modeAuth", mm.mode)
 	}
 
-	out, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := out.(model).mode; got != modeNormal {
 		t.Errorf("mode = %v after esc, want modeNormal", got)
 	}

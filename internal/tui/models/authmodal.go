@@ -1,9 +1,8 @@
 package models
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/components"
@@ -30,13 +29,13 @@ func NewAuthModal() AuthModal {
 	u.Placeholder = "username"
 	u.Prompt = "user: "
 	u.CharLimit = 128
-	u.Width = inputWidth
+	u.SetWidth(inputWidth)
 
 	p := textinput.New()
 	p.Placeholder = "password"
 	p.Prompt = "pass: "
 	p.CharLimit = 128
-	p.Width = inputWidth
+	p.SetWidth(inputWidth)
 	p.EchoMode = textinput.EchoPassword
 	p.EchoCharacter = '•'
 
@@ -64,7 +63,7 @@ func (a *AuthModal) Reset() {
 
 // Update routes keys to the focused field and toggles focus on tab/arrows.
 func (a AuthModal) Update(msg tea.Msg) (AuthModal, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "tab", "shift+tab", "up", "down":
 			a.toggleFocus()

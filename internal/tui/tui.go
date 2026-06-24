@@ -4,8 +4,7 @@
 package tui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
-
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/components"
@@ -82,7 +81,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateAuth(msg)
 	}
 
-	if key, ok := msg.(tea.KeyMsg); ok && !m.sidebar.Filtering() {
+	if key, ok := msg.(tea.KeyPressMsg); ok && !m.sidebar.Filtering() {
 		switch key.String() {
 		case "q", "ctrl+c":
 			_ = m.mgr.Disconnect()
@@ -110,7 +109,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateAuth handles input while the credential modal is open.
 func (m model) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
 			m.auth.Reset()
@@ -182,9 +181,9 @@ func (m model) dims() (sideW, sideH, outW, outH int) {
 	return
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if !m.terminal.Ready() {
-		return "loading..."
+		return altView("loading...")
 	}
 
 	left := m.sidebar.View(true) // sidebar is the focused pane
@@ -193,7 +192,15 @@ func (m model) View() string {
 	if m.mode == modeAuth {
 		body = components.Center(body, m.auth.View()) // popup floating over the view
 	}
-	return body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys)
+	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys))
+}
+
+// altView wraps content in a tea.View on the alt screen (v2: alt screen is
+// declarative, set per-frame instead of via a program option).
+func altView(content string) tea.View {
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 func (m model) statusLine() string {

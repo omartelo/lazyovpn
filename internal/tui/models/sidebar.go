@@ -5,8 +5,8 @@ package models
 import (
 	"fmt"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/omartelo/lazyovpn/internal/tui/components"
 	"github.com/omartelo/lazyovpn/internal/vpn"
