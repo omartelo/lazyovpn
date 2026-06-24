@@ -89,6 +89,7 @@ runs `go test` as a pre-hook, and publishes tar.gz archives + checksums with a
 commit-grouped changelog. To cut a version:
 
 - [ ] `go test -race ./...` passes; `go vet ./...` clean and `gofmt` applied.
+- [ ] Update `CHANGELOG.md`: move `[Unreleased]` entries under a new `[vX.Y.Z] - DATE` heading and refresh the compare links at the bottom.
 - [ ] (Optional, local dry run) `goreleaser release --snapshot --clean`.
 - [ ] Tag `vX.Y.Z` and push it — the workflow does the rest.
 
