@@ -1,0 +1,62 @@
+# GoReleaser — build + release pipeline. Linux only: lazyovpn shells out to
+# openvpn/pkexec and the zenity/kdialog file choosers, all Linux-specific.
+# Docs: https://goreleaser.com
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test -race ./... # release gate: suite must pass before publishing
+
+builds:
+  - id: lazyovpn
+    main: .
+    binary: lazyovpn
+    env:
+      - CGO_ENABLED=0 # pure Go; static binary
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: lazyovpn
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: omartelo
+    name: lazyovpn

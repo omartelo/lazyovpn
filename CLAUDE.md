@@ -81,13 +81,16 @@ bordered box; the root only places panels and routes messages.
 
 ## Release checklist
 
-When cutting a version:
+Releases are built by **GoReleaser** (`.goreleaser.yaml`), triggered by the
+`release` workflow on any `v*` tag push. The release version comes from the tag
+via ldflags (`-X main.version`); the `version` var in `main.go` is only the
+dev fallback for plain `go build`/`go run`. GoReleaser builds linux amd64+arm64,
+runs `go test` as a pre-hook, and publishes tar.gz archives + checksums with a
+commit-grouped changelog. To cut a version:
 
-- [ ] Bump `version` in `main.go`.
-- [ ] Update `CHANGELOG.md` (keep-a-changelog style: move `Unreleased` entries under the new version + date).
-- [ ] `go test -race ./...` passes.
-- [ ] `go vet ./...` clean and `gofmt` applied.
-- [ ] Tag matches the bumped version.
+- [ ] `go test -race ./...` passes; `go vet ./...` clean and `gofmt` applied.
+- [ ] (Optional, local dry run) `goreleaser release --snapshot --clean`.
+- [ ] Tag `vX.Y.Z` and push it — the workflow does the rest.
 
 ## Known ceilings (search `ponytail:`)
 

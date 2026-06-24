@@ -1,5 +1,8 @@
 # Built binary
 /lazyovpn
 
+# GoReleaser output
+/dist/
+
 # Editor
 .idea/
