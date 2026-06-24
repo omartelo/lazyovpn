@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -96,5 +97,54 @@ func TestAddKeyOpensModal(t *testing.T) {
 	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := out.(model).mode; got != modeNormal {
 		t.Errorf("mode = %v after esc, want modeNormal", got)
+	}
+}
+
+// Picking a file then pressing enter imports it and appends it to the sidebar —
+// no dialog is spawned (the FilePickedMsg is delivered directly).
+func TestAddConfirmImports(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	src := filepath.Join(t.TempDir(), "new.ovpn")
+	if err := os.WriteFile(src, []byte("client\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(nil, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}) // open modal
+	m = out.(model)
+	out, _ = m.Update(utils.FilePickedMsg{Path: src}) // chooser result
+	m = out.(model)
+	out, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // import + add
+	m = out.(model)
+
+	if m.mode != modeNormal {
+		t.Errorf("mode = %v after import, want modeNormal", m.mode)
+	}
+	cfg, ok := m.sidebar.SelectedConfig()
+	if !ok || cfg.Name != "new" {
+		t.Errorf("sidebar config = %+v ok=%v, want name new", cfg, ok)
+	}
+}
+
+// statusLine surfaces the error message when in error state, otherwise the
+// active connection name.
+func TestStatusLine(t *testing.T) {
+	m := New(nil, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	m.terminal.SetError("boom")
+	if got := m.statusLine(); !strings.Contains(got, "boom") {
+		t.Errorf("statusLine = %q, want it to contain the error", got)
+	}
+
+	m.terminal.StartConnection("alpha")
+	if got := m.statusLine(); !strings.Contains(got, "alpha") {
+		t.Errorf("statusLine = %q, want it to contain the active name", got)
 	}
 }

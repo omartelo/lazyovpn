@@ -88,6 +88,19 @@ func TestTerminalMarkClosed(t *testing.T) {
 	}
 }
 
+func TestTerminalMarkDisconnected(t *testing.T) {
+	term := newSizedTerminal()
+	term.StartConnection("alpha")
+	term.MarkDisconnected()
+
+	if term.State() != StateDisconnected {
+		t.Errorf("State() = %v, want StateDisconnected", term.State())
+	}
+	if term.ActiveName() != "" {
+		t.Errorf("ActiveName() = %q after disconnect, want empty", term.ActiveName())
+	}
+}
+
 func TestTerminalSetError(t *testing.T) {
 	term := newSizedTerminal()
 	term.SetError("boom")

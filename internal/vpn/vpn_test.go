@@ -91,6 +91,60 @@ func TestNeedsAuthMissingFile(t *testing.T) {
 	}
 }
 
+func TestDiscover(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	sys1 := t.TempDir()
+	sys2 := t.TempDir()
+	conns := filepath.Join(home, ".config", "lazyovpn", "connections")
+	if err := os.MkdirAll(conns, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	write := func(dir, name string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("client\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(sys1, "alpha.ovpn")
+	write(sys1, "notes.txt") // wrong extension — skipped
+	if err := os.Mkdir(filepath.Join(sys1, "sub"), 0o755); err != nil {
+		t.Fatal(err) // a directory — skipped
+	}
+	write(sys2, "beta.conf")
+	write(conns, "gamma.ovpn")
+
+	// sys1 listed twice exercises the dedup guard; the missing dir is skipped.
+	orig := configDirs
+	t.Cleanup(func() { configDirs = orig })
+	configDirs = []string{sys1, sys1, sys2, "/does/not/exist"}
+
+	got, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover error: %v", err)
+	}
+
+	names := map[string]int{}
+	for _, c := range got {
+		names[c.Name]++
+	}
+	for _, want := range []string{"alpha", "beta", "gamma"} {
+		if names[want] != 1 {
+			t.Errorf("config %q count = %d, want 1", want, names[want])
+		}
+	}
+	if _, ok := names["notes"]; ok {
+		t.Error("notes.txt discovered, want it skipped (wrong extension)")
+	}
+	if _, ok := names["sub"]; ok {
+		t.Error("subdirectory discovered, want it skipped")
+	}
+	if len(got) != 3 {
+		t.Errorf("discovered %d configs, want 3", len(got))
+	}
+}
+
 func TestWriteCredsFile(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
