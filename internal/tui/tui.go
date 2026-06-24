@@ -32,14 +32,15 @@ const (
 )
 
 type model struct {
-	sidebar  models.Sidebar
-	terminal models.Terminal
-	auth     models.AuthModal
-	mode     appMode
-	pending  vpn.Config // connection awaiting credentials
-	mgr      *vpn.Manager
-	logCh    <-chan string // live stream of the active connection
-	w, h     int
+	sidebar    models.Sidebar
+	terminal   models.Terminal
+	auth       models.AuthModal
+	mode       appMode
+	pending    vpn.Config // connection awaiting credentials
+	mgr        *vpn.Manager
+	logCh      <-chan string // live stream of the active connection
+	markedConn string        // connection currently flagged connected in the sidebar
+	w, h       int
 }
 
 // New builds the initial model from the already-discovered configs.
@@ -66,12 +67,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // log from an old connection
 		}
 		m.terminal.AppendLog(msg.Line)
+		m.syncSidebar() // tunnel-up flips the sidebar marker green
 		return m, utils.WaitForLog(m.logCh)
 
 	case utils.LogClosedMsg:
 		if msg.Ch == m.logCh {
 			m.terminal.MarkClosed()
 			m.logCh = nil
+			m.syncSidebar()
 		}
 		return m, nil
 	}
@@ -92,6 +95,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.mgr.Disconnect()
 			m.terminal.MarkDisconnected()
 			m.logCh = nil
+			m.syncSidebar()
 			return m, nil
 		}
 	}
@@ -156,7 +160,21 @@ func (m model) connect(cfg vpn.Config, username, password string) (tea.Model, te
 	}
 	m.logCh = ch
 	m.terminal.StartConnection(cfg.Name)
+	m.syncSidebar() // a fresh connect clears any previous green marker
 	return m, utils.WaitForLog(ch)
+}
+
+// syncSidebar flags the connected connection in the list, but only on a real
+// state change (avoids rebuilding the delegate on every log line).
+func (m *model) syncSidebar() {
+	name := ""
+	if m.terminal.State() == models.StateConnected {
+		name = m.terminal.ActiveName()
+	}
+	if name != m.markedConn {
+		m.markedConn = name
+		m.sidebar.SetConnected(name)
+	}
 }
 
 // layout recomputes pane sizes. Reserves 2 rows: status + help.

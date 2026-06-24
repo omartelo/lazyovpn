@@ -1,7 +1,10 @@
 package models
 
 import (
+	"strings"
 	"testing"
+
+	"charm.land/bubbles/v2/list"
 
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
@@ -30,6 +33,23 @@ func TestSidebarSelection(t *testing.T) {
 
 	if s.Filtering() {
 		t.Error("Filtering() = true on a fresh list, want false")
+	}
+}
+
+func TestConnDelegateMarksConnected(t *testing.T) {
+	items := []list.Item{item{Name: "alpha"}, item{Name: "beta"}}
+	l := list.New(items, connDelegate{connectedName: "alpha"}, 20, 4)
+	d := connDelegate{connectedName: "alpha"}
+
+	var connected, plain strings.Builder
+	d.Render(&connected, l, 0, item{Name: "alpha"})
+	d.Render(&plain, l, 1, item{Name: "beta"})
+
+	if !strings.Contains(connected.String(), "●") {
+		t.Error("connected item should render the ● marker")
+	}
+	if strings.Contains(plain.String(), "●") {
+		t.Error("non-connected item should not render the ● marker")
 	}
 }
 
