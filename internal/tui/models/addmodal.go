@@ -8,10 +8,7 @@ import (
 	"github.com/omartelo/lazyovpn/internal/tui/utils"
 )
 
-const (
-	addInnerW = 56 // modal inner width (inside the box border)
-	addInnerH = 5  // modal inner height: prompt + path + hint
-)
+const addInnerW = 56 // modal inner width (height auto-fits the content)
 
 // AddModal hosts the "import a connection" flow: it launches the native file
 // chooser and shows the picked path until the user confirms with enter.
@@ -67,5 +64,5 @@ func (a AddModal) View() string {
 	default:
 		body = "selected:\n" + fit.Render(a.path) + "\n\n" + hint
 	}
-	return components.TitledBox("add connection", body, addInnerW, addInnerH, true)
+	return components.Dialog{Title: "add connection", Width: addInnerW}.Render(body)
 }

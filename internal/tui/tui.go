@@ -24,8 +24,7 @@ const (
 
 	footerRows = 2 // rows reserved below the panes: status line + help line
 
-	forgetInnerW = 54 // confirm-forget popup inner width
-	forgetInnerH = 4  // confirm-forget popup inner height: prompt + name + hint
+	forgetInnerW = 54 // confirm-forget popup inner width (height auto-fits)
 )
 
 var (
@@ -332,7 +331,7 @@ func altView(content string) tea.View {
 func (m model) forgetView() string {
 	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
 		components.Hint.Render("y/enter: forget · n/esc: cancel")
-	return components.TitledBox("forget credentials", body, forgetInnerW, forgetInnerH, true)
+	return components.Dialog{Title: "forget credentials", Width: forgetInnerW}.Render(body)
 }
 
 func (m model) statusLine() string {

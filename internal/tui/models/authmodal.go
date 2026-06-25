@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	authInnerW    = 64  // modal inner width (inside the box border)
-	authInnerH    = 8   // modal inner height: 2 fields + save line + hint line
+	authInnerW    = 64  // modal inner width (height auto-fits the content)
 	inputWidth    = 34  // text input width (leaves room for the "user: " prompt)
 	credCharLimit = 128 // max length accepted for username/password
 )
@@ -114,5 +113,5 @@ func (a AuthModal) View() string {
 	saveLine := box + " save credentials to keyring"
 	hint := components.Hint.Render("enter: connect · ctrl+s: save · tab: switch · esc: cancel")
 	body := a.username.View() + "\n\n" + a.password.View() + "\n\n" + saveLine + "\n\n" + hint
-	return components.TitledBox("auth — "+a.connName, body, authInnerW, authInnerH, true)
+	return components.Dialog{Title: "auth — " + a.connName, Width: authInnerW}.Render(body)
 }
