@@ -30,7 +30,7 @@ const (
 const footerRows = 2
 
 // Confirm-popup inner widths, in columns. Height auto-fits the content via
-// common.Dialog, so only the width is pinned.
+// common.Popup, so only the width is pinned.
 const (
 	forgetInnerW     = 54
 	disconnectInnerW = 54
@@ -385,14 +385,14 @@ func altView(content string) tea.View {
 func (m *UI) forgetView() string {
 	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
 		common.Hint.Render("y/enter: forget · n/esc: cancel")
-	return common.Dialog{Title: "forget credentials", Width: forgetInnerW}.Render(body)
+	return common.Popup{Title: "forget credentials", Width: forgetInnerW}.Render(body)
 }
 
 // disconnectView renders the confirm-disconnect popup floating over the main view.
 func (m *UI) disconnectView() string {
 	body := "Disconnect from\n\"" + m.terminal.ActiveName() + "\"?\n\n" +
 		common.Hint.Render("y/enter: disconnect · n/esc: cancel")
-	return common.Dialog{Title: "disconnect", Width: disconnectInnerW}.Render(body)
+	return common.Popup{Title: "disconnect", Width: disconnectInnerW}.Render(body)
 }
 
 func (m *UI) statusLine() string {

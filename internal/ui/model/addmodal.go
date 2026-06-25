@@ -64,5 +64,5 @@ func (a AddModal) View() string {
 	default:
 		body = "selected:\n" + fit.Render(a.path) + "\n\n" + hint
 	}
-	return common.Dialog{Title: "add connection", Width: addInnerW}.Render(body)
+	return common.Popup{Title: "add connection", Width: addInnerW}.Render(body)
 }

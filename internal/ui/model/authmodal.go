@@ -115,5 +115,5 @@ func (a AuthModal) View() string {
 	saveLine := box + " save credentials to keyring"
 	hint := common.Hint.Render("enter: connect · ctrl+s: save · tab: switch · esc: cancel")
 	body := a.username.View() + "\n\n" + a.password.View() + "\n\n" + saveLine + "\n\n" + hint
-	return common.Dialog{Title: "auth — " + a.connName, Width: authInnerW}.Render(body)
+	return common.Popup{Title: "auth — " + a.connName, Width: authInnerW}.Render(body)
 }
