@@ -61,7 +61,7 @@ func TestStaleLogIgnored(t *testing.T) {
 
 // A config with a bare auth-user-pass directive opens the credential modal on
 // enter (and esc cancels it) — without spawning openvpn.
-func TestEnterOpensAuthModal(t *testing.T) {
+func TestEnterOpensCredentials(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vpn.ovpn")
 	if err := os.WriteFile(path, []byte("client\nauth-user-pass\n"), 0o644); err != nil {
 		t.Fatal(err)

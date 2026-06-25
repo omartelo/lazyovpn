@@ -67,7 +67,7 @@ type shared struct {
 type UI struct {
 	sidebar  Sidebar
 	terminal Terminal
-	auth     AuthModal
+	creds    dialog.Credentials
 	picker   dialog.FilePicker
 	mode     appMode
 	pending  vpn.Config     // connection awaiting credentials
@@ -83,7 +83,7 @@ func New(configs []vpn.Config, mgr *vpn.Manager) *UI {
 	m := &UI{mgr: mgr}
 	m.sidebar = NewSidebar(configs, &m.sh) // sidebar reads m.sh.connected by pointer
 	m.terminal = NewTerminal()
-	m.auth = NewAuthModal()
+	m.creds = dialog.NewCredentials()
 	m.picker = dialog.NewFilePicker("add connection")
 	return m
 }
@@ -183,14 +183,14 @@ func (m *UI) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
-			m.auth.Reset()
+			m.creds.Reset()
 			m.mode = modeNormal
 			return m, nil
 		case "enter":
-			user, pass := m.auth.Username(), m.auth.Password()
-			save := m.auth.Save()
+			user, pass := m.creds.Username(), m.creds.Password()
+			save := m.creds.Save()
 			cfg := m.pending
-			m.auth.Reset() // drop the password as soon as it is handed off
+			m.creds.Reset() // drop the password as soon as it is handed off
 			m.mode = modeNormal
 			if save {
 				// Best-effort: a keyring write failure must not block the connect.
@@ -199,7 +199,7 @@ func (m *UI) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.connect(cfg, user, pass)
 		}
 	}
-	cmd := m.auth.Handle(msg)
+	cmd := m.creds.Handle(msg)
 	return m, cmd
 }
 
@@ -247,7 +247,7 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 		}
 		m.pending = cfg
 		m.mode = modeAuth
-		return m, m.auth.Open(cfg.Name)
+		return m, m.creds.Open(cfg.Name)
 	}
 	return m.connect(cfg, "", "")
 }
@@ -309,7 +309,7 @@ func (m *UI) View() tea.View {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	switch m.mode { // popup floating over the view
 	case modeAuth:
-		body = common.Center(body, m.auth.View())
+		body = common.Center(body, m.creds.View())
 	case modeAdd:
 		body = common.Center(body, m.picker.View())
 	case modeConfirm:

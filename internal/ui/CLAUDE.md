@@ -11,14 +11,16 @@ the pattern.
 
 - `common/` — **stateless** view primitives (`Popup`, `TitledBox`,
   `Overlay`/`Center`, the theme). Import these; add new primitives here.
-- `dialog/` — **stateful** overlay components (`Confirm`, `FilePicker`). Built
-  on `common.Popup`; the UI builds, drives, and centers them.
+- `dialog/` — **stateful** overlay components (`Confirm`, `FilePicker`,
+  `Credentials`). Built on `common.Popup`; the UI builds, drives, and centers
+  them.
 - `utils/` — bubbletea glue: the log-stream pump (`WaitForLog`, the
   `LogMsg`/`LogClosedMsg` messages). The file chooser now lives in
   `dialog.FilePicker`.
 - `model/` — the brain: `UI` (the sole bubbletea model) plus the panels it
-  drives (`Sidebar`, `Terminal`, `AuthModal`); the import flow (`add.go`) drives
-  a `dialog.FilePicker`.
+  drives (`Sidebar`, `Terminal`). The overlays — credential prompt, confirm,
+  file picker — are `dialog` components the UI drives (the import flow lives in
+  `add.go`).
 
 Import direction is one-way and cycle-free: `common` depends on nothing in the
 UI tree; `dialog` and `utils` build on `common`; `model` imports all three.
@@ -58,12 +60,12 @@ helpers `UI` owns and calls directly.
 | ------------ | -------------------- | ---------------------------------------------- |
 | `Terminal`   | `model/terminal.go`  | Imperative ✓ — targeted methods, no `Handle`   |
 | `Sidebar`    | `model/sidebar.go`   | Imperative ✓ — hand-rolled (no bubbles list/delegate); `UI.Update` drives the cursor via `Move`, reads `shared.connected` by pointer |
-| `AuthModal`  | `model/authmodal.go` | Imperative ✓ — `Handle(msg)` routes to the focused field |
 
-(The import picker is not a panel: it is `dialog.FilePicker`, driven by the
-`add.go` flow.) No panel has an Elm `Update(tea.Msg) (T, tea.Cmd)`. A panel that
-must forward a raw message to a wrapped bubble (`AuthModal` → its textinputs)
-exposes a
+(The credential prompt and import picker are not panels: they are
+`dialog.Credentials` and `dialog.FilePicker`, overlay components the `UI` drives
+— see the `dialog` package map above.) No panel or dialog has an Elm
+`Update(tea.Msg) (T, tea.Cmd)`. A component that must forward a raw message to a
+wrapped bubble (`dialog.Credentials` → its textinputs) exposes a
 pointer-receiver `Handle(msg tea.Msg) tea.Cmd` that mutates in place; `UI.Update`
 calls it and does not reassign. Never add a sub-model that returns a new copy of
 itself.
