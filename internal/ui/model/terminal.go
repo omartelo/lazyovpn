@@ -1,4 +1,4 @@
-package models
+package model
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 
-	"github.com/omartelo/lazyovpn/internal/tui/components"
+	"github.com/omartelo/lazyovpn/internal/ui/common"
 )
 
 // connectedMarker is the openvpn log line that signals the tunnel is up.
@@ -25,16 +25,16 @@ const (
 
 // Badge renders the colored status indicator for a state.
 func (s ConnState) Badge() string {
-	label, color := "idle", components.Muted
+	label, color := "idle", common.Muted
 	switch s {
 	case StateConnecting:
-		label, color = "connecting...", components.Warn
+		label, color = "connecting...", common.Warn
 	case StateConnected:
-		label, color = "connected", components.Connected
+		label, color = "connected", common.Connected
 	case StateDisconnected:
-		label, color = "disconnected", components.Muted
+		label, color = "disconnected", common.Muted
 	case StateError:
-		label, color = "error", components.Danger
+		label, color = "error", common.Danger
 	}
 	return lipgloss.NewStyle().Foreground(color).Bold(true).Render("● " + label)
 }
@@ -142,7 +142,7 @@ func (t Terminal) View(focused bool) string {
 	if t.shownName != "" {
 		title = "terminal — " + t.shownName
 	}
-	return components.TitledBox(title, t.vp.View(), t.w, t.h, focused)
+	return common.TitledBox(title, t.vp.View(), t.w, t.h, focused)
 }
 
 // State returns the current connection state.

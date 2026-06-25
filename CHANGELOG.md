@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Disconnecting (`d`) now asks for confirmation before tearing down a live
+  connection — `y`/`enter` confirms, `n`/`esc` cancels. With nothing connected,
+  `d` stays a no-op (no popup).
+
+### Removed
+
+- Connection-list filtering (`/`). The sidebar is now rendered directly instead
+  of through a list widget; filtering will return if config lists ever grow
+  large enough to need it.
+
 ## [0.2.0] - 2026-06-24
 
 ### Added

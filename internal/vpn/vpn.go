@@ -26,9 +26,18 @@ type Config struct {
 	Path string
 }
 
+// isConfigExt reports whether ext is an OpenVPN config extension (.ovpn/.conf).
+func isConfigExt(ext string) bool {
+	return ext == ".ovpn" || ext == ".conf"
+}
+
 // logBufferLines is the buffered capacity of a connection's log channel — enough
 // to absorb openvpn's startup burst without blocking the scanner goroutine.
 const logBufferLines = 100
+
+// privateFileMode is the mode for files that may hold secrets — inline keys or
+// credentials: owner read/write only.
+const privateFileMode os.FileMode = 0o600
 
 // Manager holds the active connection. Only one at a time.
 //
@@ -52,7 +61,9 @@ func ConnectionsDir() (string, error) {
 }
 
 // Discover scans the system directories plus ConnectionsDir for configs.
-func Discover() ([]Config, error) {
+// Discovery is best-effort: unreadable or missing directories are skipped, so it
+// never fails.
+func Discover() []Config {
 	dirs := configDirs
 	if dir, err := ConnectionsDir(); err == nil {
 		dirs = append(dirs, dir)
@@ -70,7 +81,7 @@ func Discover() ([]Config, error) {
 				continue
 			}
 			ext := filepath.Ext(e.Name())
-			if ext != ".ovpn" && ext != ".conf" {
+			if !isConfigExt(ext) {
 				continue
 			}
 			path := filepath.Join(dir, e.Name())
@@ -84,7 +95,7 @@ func Discover() ([]Config, error) {
 			})
 		}
 	}
-	return configs, nil
+	return configs
 }
 
 // ImportConfig copies an .ovpn/.conf file into ConnectionsDir and returns the
@@ -92,7 +103,7 @@ func Discover() ([]Config, error) {
 // overwrites an existing file of the same name (re-import updates in place).
 func ImportConfig(srcPath string) (Config, error) {
 	ext := filepath.Ext(srcPath)
-	if ext != ".ovpn" && ext != ".conf" {
+	if !isConfigExt(ext) {
 		return Config{}, fmt.Errorf("not an OpenVPN config (.ovpn/.conf): %s", srcPath)
 	}
 	dir, err := ConnectionsDir()
@@ -104,8 +115,7 @@ func ImportConfig(srcPath string) (Config, error) {
 	}
 	base := filepath.Base(srcPath)
 	dst := filepath.Join(dir, base)
-	// 0600: a config can carry inline keys/credentials — keep it private.
-	if err := files.Copy(srcPath, dst, 0o600); err != nil {
+	if err := files.Copy(srcPath, dst, privateFileMode); err != nil {
 		return Config{}, fmt.Errorf("import config: %w", err)
 	}
 	return Config{Name: strings.TrimSuffix(base, ext), Path: dst}, nil
@@ -153,7 +163,7 @@ func writeCredsFile(username, password string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	if err := f.Chmod(0o600); err != nil {
+	if err := f.Chmod(privateFileMode); err != nil {
 		os.Remove(f.Name())
 		return "", err
 	}

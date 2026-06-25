@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/omartelo/lazyovpn/internal/tui"
+	"github.com/omartelo/lazyovpn/internal/ui/model"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
@@ -19,16 +19,13 @@ func main() {
 		Short:   "TUI for managing OpenVPN connections",
 		Version: version,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			configs, err := vpn.Discover()
-			if err != nil {
-				return err
-			}
 			// No configs is fine — the user can import one in the TUI with "a".
+			configs := vpn.Discover()
 
 			mgr := vpn.NewManager()
 			// v2: alt screen is declarative — set in the model's View(), not here.
-			p := tea.NewProgram(tui.New(configs, mgr))
-			_, err = p.Run()
+			p := tea.NewProgram(model.New(configs, mgr))
+			_, err := p.Run()
 			return err
 		},
 	}
