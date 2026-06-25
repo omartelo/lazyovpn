@@ -161,11 +161,8 @@ func TestForgetConfirmDeletes(t *testing.T) {
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	mm := out.(*UI)
-	if mm.mode != modeForget {
-		t.Fatalf("mode = %v after x with saved creds, want modeForget", mm.mode)
-	}
-	if mm.forgetName != "vpn" {
-		t.Errorf("forgetName = %q, want vpn", mm.forgetName)
+	if mm.mode != modeConfirm {
+		t.Fatalf("mode = %v after x with saved creds, want modeConfirm", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
@@ -209,8 +206,8 @@ func TestDisconnectConfirmTearsDown(t *testing.T) {
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	mm := out.(*UI)
-	if mm.mode != modeDisconnect {
-		t.Fatalf("mode = %v after d while connected, want modeDisconnect", mm.mode)
+	if mm.mode != modeConfirm {
+		t.Fatalf("mode = %v after d while connected, want modeConfirm", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})

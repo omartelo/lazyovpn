@@ -9,15 +9,17 @@ the pattern.
 
 ## Package map
 
-- `common/` — reusable view **components** (`Dialog`, `TitledBox`,
-  `Overlay`/`Center`, the theme). Import these; add new reusable pieces here.
+- `common/` — **stateless** view primitives (`Popup`, `TitledBox`,
+  `Overlay`/`Center`, the theme). Import these; add new primitives here.
+- `dialog/` — **stateful** overlay components (`Confirm`). Built on
+  `common.Popup`; the UI builds, drives, and centers them.
 - `utils/` — bubbletea glue: the file-chooser command and the log-stream pump
   (`PickFile`, `WaitForLog`, the `LogMsg`/`LogClosedMsg` messages).
 - `model/` — the brain: `UI` (the sole bubbletea model) plus the panels it
   drives (`Sidebar`, `Terminal`, `AuthModal`, `AddModal`).
 
-Import direction is one-way and cycle-free: `common` and `utils` depend on
-nothing in the UI tree; `model` imports both.
+Import direction is one-way and cycle-free: `common` depends on nothing in the
+UI tree; `dialog` and `utils` build on `common`; `model` imports all three.
 
 ## Architecture
 
@@ -35,9 +37,9 @@ helpers `UI` owns and calls directly.
   `MarkClosed`, `State`, `View`). New panels follow this — expose methods (and
   return a `tea.Cmd` when a side effect is needed), render via `View(...)`, and
   let `UI.Update` decide when to call in.
-- **Components are external.** Reusable view pieces live in `common/` and are
-  imported. Build new reusable pieces there, not in `model/`. Glue commands
-  (file chooser, log pump) live in `utils/`.
+- **Components are external.** Stateless view primitives live in `common/`;
+  stateful overlay components (confirm popups, pickers) live in `dialog/`. Build
+  new reusable pieces there, not in `model/`. Glue commands live in `utils/`.
 
 ## Rules (from crush's AGENTS.md, they hold here)
 
@@ -76,10 +78,11 @@ not its 23 KB machinery).
 - **Constants** live in small, documented declarations grouped by purpose — a
   doc comment per constant or group. No single mega `const()`. State enums are a
   typed `uint8` with a doc comment (see `appMode`).
-- **Modes** are the overlay stack-of-one: `appMode` + an inline `*View()` method
-  (`forgetView`, `disconnectView`) or a sub-model modal (`auth`, `add`). A full
-  `dialog.Overlay` stack (crush has one) is overkill at four modes — add it only
-  when popups need to stack.
+- **Modes** are the overlay stack-of-one: `appMode` selects which overlay owns
+  input. Yes/no popups share one `modeConfirm` backed by a reusable
+  `dialog.Confirm` (built with an `onYes` closure); stateful modals (`auth`,
+  `add`) keep their own mode. A full `dialog.Overlay` stack (crush has one) is
+  overkill while only one popup shows at a time — add it when popups must stack.
 - **Stale-channel guard (invariant #4):** every `utils.LogMsg`/`LogClosedMsg`
   carries its source channel; drop it when `msg.Ch != m.logCh`. Keep this on any
   new log-channel message — it is what stops a connection switch from mixing old

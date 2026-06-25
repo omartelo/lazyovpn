@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/ui/common"
+	"github.com/omartelo/lazyovpn/internal/ui/dialog"
 	"github.com/omartelo/lazyovpn/internal/ui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
@@ -29,13 +30,6 @@ const (
 // line and the help line.
 const footerRows = 2
 
-// Confirm-popup inner widths, in columns. Height auto-fits the content via
-// common.Popup, so only the width is pinned.
-const (
-	forgetInnerW     = 54
-	disconnectInnerW = 54
-)
-
 var (
 	helpStyle = common.Hint.Padding(0, 1)
 	nameStyle = common.Hint
@@ -51,11 +45,10 @@ type appMode uint8
 
 // Possible appMode values.
 const (
-	modeNormal     appMode = iota
-	modeAuth               // credential modal is capturing input
-	modeAdd                // import-connection modal is open
-	modeForget             // confirm forgetting saved credentials
-	modeDisconnect         // confirm tearing down the live connection
+	modeNormal  appMode = iota
+	modeAuth            // credential modal is capturing input
+	modeAdd             // import-connection modal is open
+	modeConfirm         // a yes/no confirm popup is up (forget creds, disconnect)
 )
 
 // shared is the global UI state the panels read by pointer (crush's
@@ -72,17 +65,17 @@ type shared struct {
 // happens on this type; the panels only ever see a message through a method UI
 // calls on them.
 type UI struct {
-	sidebar    Sidebar
-	terminal   Terminal
-	auth       AuthModal
-	add        AddModal
-	mode       appMode
-	pending    vpn.Config // connection awaiting credentials
-	forgetName string     // connection whose saved creds the forget modal targets
-	mgr        *vpn.Manager
-	logCh      <-chan string // live stream of the active connection
-	sh         shared        // global state the panels read by pointer
-	w, h       int
+	sidebar  Sidebar
+	terminal Terminal
+	auth     AuthModal
+	add      AddModal
+	mode     appMode
+	pending  vpn.Config     // connection awaiting credentials
+	confirm  dialog.Confirm // the active yes/no popup (forget creds, disconnect)
+	mgr      *vpn.Manager
+	logCh    <-chan string // live stream of the active connection
+	sh       shared        // global state the panels read by pointer
+	w, h     int
 }
 
 // New builds the initial UI from the already-discovered configs.
@@ -127,10 +120,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateAuth(msg)
 	case modeAdd:
 		return m.updateAdd(msg)
-	case modeForget:
-		return m.updateForget(msg)
-	case modeDisconnect:
-		return m.updateDisconnect(msg)
+	case modeConfirm:
+		return m.updateConfirm(msg)
 	}
 
 	if key, ok := msg.(tea.KeyPressMsg); ok {
@@ -148,7 +139,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// when something is actually connected (logCh != nil); otherwise d is a
 			// no-op — nothing to disconnect.
 			if m.logCh != nil {
-				m.mode = modeDisconnect
+				m.confirm = dialog.NewConfirm("disconnect",
+					"Disconnect from\n\""+m.terminal.ActiveName()+"\"?", m.disconnect)
+				m.mode = modeConfirm
 			}
 			return m, nil
 		case "x":
@@ -157,8 +150,11 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// there is actually something stored — no popup for a no-op.
 			if cfg, ok := m.sidebar.SelectedConfig(); ok {
 				if _, _, has, _ := vpn.LoadCreds(cfg.Name); has {
-					m.forgetName = cfg.Name
-					m.mode = modeForget
+					name := cfg.Name
+					m.confirm = dialog.NewConfirm("forget credentials",
+						"Forget saved credentials for\n\""+name+"\"?",
+						func() { _ = vpn.ForgetCreds(name) })
+					m.mode = modeConfirm
 				}
 			}
 			return m, nil
@@ -225,43 +221,30 @@ func (m *UI) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateForget handles the confirm-forget popup. y/enter deletes the saved
-// credentials; n/esc backs out without touching the keyring.
-func (m *UI) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
+// updateConfirm handles any yes/no confirm popup (forget creds, disconnect).
+// y/enter runs the action the popup was built with; n/esc backs out.
+func (m *UI) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
 	switch key.String() {
 	case "y", "enter":
-		_ = vpn.ForgetCreds(m.forgetName)
-		m.forgetName = ""
+		m.confirm.Yes()
 		m.mode = modeNormal
 	case "n", "esc":
-		m.forgetName = ""
 		m.mode = modeNormal
 	}
 	return m, nil
 }
 
-// updateDisconnect handles the confirm-disconnect popup. y/enter tears down the
-// live connection; n/esc backs out and leaves it running.
-func (m *UI) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyPressMsg)
-	if !ok {
-		return m, nil
-	}
-	switch key.String() {
-	case "y", "enter":
-		_ = m.mgr.Disconnect()
-		m.terminal.MarkDisconnected()
-		m.logCh = nil
-		m.syncConnected()
-		m.mode = modeNormal
-	case "n", "esc":
-		m.mode = modeNormal
-	}
-	return m, nil
+// disconnect tears down the live tunnel; it is the action behind the disconnect
+// confirm popup.
+func (m *UI) disconnect() {
+	_ = m.mgr.Disconnect()
+	m.terminal.MarkDisconnected()
+	m.logCh = nil
+	m.syncConnected()
 }
 
 // addConfirm imports the picked file into the connections dir and appends it to
@@ -365,10 +348,8 @@ func (m *UI) View() tea.View {
 		body = common.Center(body, m.auth.View())
 	case modeAdd:
 		body = common.Center(body, m.add.View())
-	case modeForget:
-		body = common.Center(body, m.forgetView())
-	case modeDisconnect:
-		body = common.Center(body, m.disconnectView())
+	case modeConfirm:
+		body = common.Center(body, m.confirm.View())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys))
 }
@@ -379,20 +360,6 @@ func altView(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
-}
-
-// forgetView renders the confirm-forget popup floating over the main view.
-func (m *UI) forgetView() string {
-	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
-		common.Hint.Render("y/enter: forget · n/esc: cancel")
-	return common.Popup{Title: "forget credentials", Width: forgetInnerW}.Render(body)
-}
-
-// disconnectView renders the confirm-disconnect popup floating over the main view.
-func (m *UI) disconnectView() string {
-	body := "Disconnect from\n\"" + m.terminal.ActiveName() + "\"?\n\n" +
-		common.Hint.Render("y/enter: disconnect · n/esc: cancel")
-	return common.Popup{Title: "disconnect", Width: disconnectInnerW}.Render(body)
 }
 
 func (m *UI) statusLine() string {
