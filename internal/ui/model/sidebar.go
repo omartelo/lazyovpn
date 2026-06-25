@@ -1,6 +1,7 @@
-// Package models holds the per-panel bubbletea sub-models and their business rules.
-// Each panel owns its own state so new views can be added without touching the others.
-package models
+// Package model holds the root bubbletea model (ui.go) and the per-panel
+// sub-models it composes. Each panel owns its own state and business rules so
+// new views can be added without touching the others.
+package model
 
 import (
 	"fmt"
@@ -10,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/omartelo/lazyovpn/internal/tui/components"
+	"github.com/omartelo/lazyovpn/internal/ui/common"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
@@ -22,8 +23,8 @@ func (i item) Description() string { return i.Path }
 func (i item) FilterValue() string { return i.Name }
 
 var (
-	connectedStyle = lipgloss.NewStyle().Foreground(components.Connected)         // green ● marker + connected row
-	itemSelected   = lipgloss.NewStyle().Foreground(components.Accent).Bold(true) // pink cursor row
+	connectedStyle = lipgloss.NewStyle().Foreground(common.Connected)         // green ● marker + connected row
+	itemSelected   = lipgloss.NewStyle().Foreground(common.Accent).Bold(true) // pink cursor row
 	itemNormal     = lipgloss.NewStyle()
 )
 
@@ -115,7 +116,7 @@ func (s Sidebar) Update(msg tea.Msg) (Sidebar, tea.Cmd) {
 // View renders the bordered panel.
 func (s Sidebar) View(focused bool) string {
 	title := fmt.Sprintf("connections (%d)", len(s.list.Items()))
-	return components.TitledBox(title, s.list.View(), s.w, s.h, focused)
+	return common.TitledBox(title, s.list.View(), s.w, s.h, focused)
 }
 
 // SelectedConfig returns the highlighted config.

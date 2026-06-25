@@ -1,10 +1,10 @@
-package models
+package model
 
 import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/omartelo/lazyovpn/internal/tui/components"
+	"github.com/omartelo/lazyovpn/internal/ui/common"
 )
 
 const (
@@ -111,7 +111,7 @@ func (a AuthModal) View() string {
 		box = "[x]"
 	}
 	saveLine := box + " save credentials to keyring"
-	hint := components.Hint.Render("enter: connect · ctrl+s: save · tab: switch · esc: cancel")
+	hint := common.Hint.Render("enter: connect · ctrl+s: save · tab: switch · esc: cancel")
 	body := a.username.View() + "\n\n" + a.password.View() + "\n\n" + saveLine + "\n\n" + hint
-	return components.Dialog{Title: "auth — " + a.connName, Width: authInnerW}.Render(body)
+	return common.Dialog{Title: "auth — " + a.connName, Width: authInnerW}.Render(body)
 }

@@ -1,11 +1,11 @@
-package models
+package model
 
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/omartelo/lazyovpn/internal/tui/components"
-	"github.com/omartelo/lazyovpn/internal/tui/utils"
+	"github.com/omartelo/lazyovpn/internal/ui/common"
+	"github.com/omartelo/lazyovpn/internal/ui/utils"
 )
 
 const addInnerW = 56 // modal inner width (height auto-fits the content)
@@ -52,7 +52,7 @@ func (a AddModal) Update(msg tea.Msg) (AddModal, tea.Cmd) {
 
 // View renders the modal box. The root composites it over the main view.
 func (a AddModal) View() string {
-	hint := components.Hint.Render("enter: add · r: pick again · esc: cancel")
+	hint := common.Hint.Render("enter: add · r: pick again · esc: cancel")
 	fit := lipgloss.NewStyle().MaxWidth(addInnerW)
 
 	var body string
@@ -64,5 +64,5 @@ func (a AddModal) View() string {
 	default:
 		body = "selected:\n" + fit.Render(a.path) + "\n\n" + hint
 	}
-	return components.Dialog{Title: "add connection", Width: addInnerW}.Render(body)
+	return common.Dialog{Title: "add connection", Width: addInnerW}.Render(body)
 }

@@ -1,22 +1,21 @@
-// Package tui is the lazyovpn bubbletea interface: a connection sidebar + a log pane.
-// It owns global app state (layout, key routing, live stream) and composes the
-// per-panel sub-models in internal/tui/models.
-package tui
+// ui.go is the root bubbletea model: a connection sidebar + a log pane. It owns
+// global app state (layout, key routing, live stream) and composes the per-panel
+// sub-models that live alongside it in this package.
+package model
 
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/omartelo/lazyovpn/internal/tui/components"
-	"github.com/omartelo/lazyovpn/internal/tui/models"
-	"github.com/omartelo/lazyovpn/internal/tui/utils"
+	"github.com/omartelo/lazyovpn/internal/ui/common"
+	"github.com/omartelo/lazyovpn/internal/ui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
 const (
 	sidebarWidth = 42 // sidebar pane outer width in columns
 
-	// paneChromeW/H are the cells a components.TitledBox adds around its inner
+	// paneChromeW/H are the cells a common.TitledBox adds around its inner
 	// content: left+right border+padding (4) and top+bottom border (2). dims()
 	// subtracts them to get each pane's inner content size.
 	paneChromeW = 4
@@ -30,8 +29,8 @@ const (
 )
 
 var (
-	helpStyle = components.Hint.Padding(0, 1)
-	nameStyle = components.Hint
+	helpStyle = common.Hint.Padding(0, 1)
+	nameStyle = common.Hint
 )
 
 // helpKeys is the keybinding footer, lazydocker style.
@@ -48,11 +47,11 @@ const (
 	modeDisconnect         // confirm tearing down the live connection
 )
 
-type model struct {
-	sidebar    models.Sidebar
-	terminal   models.Terminal
-	auth       models.AuthModal
-	add        models.AddModal
+type app struct {
+	sidebar    Sidebar
+	terminal   Terminal
+	auth       AuthModal
+	add        AddModal
 	mode       appMode
 	pending    vpn.Config // connection awaiting credentials
 	forgetName string     // connection whose saved creds the forget modal targets
@@ -62,20 +61,20 @@ type model struct {
 	w, h       int
 }
 
-// New builds the initial model from the already-discovered configs.
-func New(configs []vpn.Config, mgr *vpn.Manager) model {
-	return model{
-		sidebar:  models.NewSidebar(configs),
-		terminal: models.NewTerminal(),
-		auth:     models.NewAuthModal(),
-		add:      models.NewAddModal(),
+// New builds the initial app from the already-discovered configs.
+func New(configs []vpn.Config, mgr *vpn.Manager) app {
+	return app{
+		sidebar:  NewSidebar(configs),
+		terminal: NewTerminal(),
+		auth:     NewAuthModal(),
+		add:      NewAddModal(),
 		mgr:      mgr,
 	}
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m app) Init() tea.Cmd { return nil }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Global messages: layout and the live log stream flow regardless of mode.
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -155,7 +154,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateAuth handles input while the credential modal is open.
-func (m model) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m app) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -181,7 +180,7 @@ func (m model) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateAdd handles input while the import-connection modal is open.
-func (m model) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m app) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -201,7 +200,7 @@ func (m model) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateForget handles the confirm-forget popup. y/enter deletes the saved
 // credentials; n/esc backs out without touching the keyring.
-func (m model) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m app) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -220,7 +219,7 @@ func (m model) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateDisconnect handles the confirm-disconnect popup. y/enter tears down the
 // live connection; n/esc backs out and leaves it running.
-func (m model) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m app) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -240,7 +239,7 @@ func (m model) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // addConfirm imports the picked file into the connections dir and appends it to
 // the sidebar. Stays open on error so the user can pick again.
-func (m model) addConfirm() (tea.Model, tea.Cmd) {
+func (m app) addConfirm() (tea.Model, tea.Cmd) {
 	path := m.add.Path()
 	if path == "" {
 		return m, nil // nothing picked yet
@@ -257,7 +256,7 @@ func (m model) addConfirm() (tea.Model, tea.Cmd) {
 }
 
 // enter connects the selected config, prompting for credentials first if needed.
-func (m model) enter() (tea.Model, tea.Cmd) {
+func (m app) enter() (tea.Model, tea.Cmd) {
 	cfg, ok := m.sidebar.SelectedConfig()
 	if !ok {
 		return m, nil
@@ -280,7 +279,7 @@ func (m model) enter() (tea.Model, tea.Cmd) {
 }
 
 // connect starts the connection and begins pumping its log stream.
-func (m model) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
+func (m app) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
 	ch, err := m.mgr.Connect(cfg, username, password)
 	if err != nil {
 		m.terminal.SetError(err.Error())
@@ -294,9 +293,9 @@ func (m model) connect(cfg vpn.Config, username, password string) (tea.Model, te
 
 // syncSidebar flags the connected connection in the list, but only on a real
 // state change (avoids rebuilding the delegate on every log line).
-func (m *model) syncSidebar() {
+func (m *app) syncSidebar() {
 	name := ""
-	if m.terminal.State() == models.StateConnected {
+	if m.terminal.State() == StateConnected {
 		name = m.terminal.ActiveName()
 	}
 	if name != m.markedConn {
@@ -306,7 +305,7 @@ func (m *model) syncSidebar() {
 }
 
 // layout recomputes pane sizes. Reserves footerRows below the panes.
-func (m *model) layout(w, h int) {
+func (m *app) layout(w, h int) {
 	m.w, m.h = w, h
 	sideW, sideH, outW, outH := m.dims()
 	firstReady := !m.terminal.Ready()
@@ -318,7 +317,7 @@ func (m *model) layout(w, h int) {
 }
 
 // dims returns the inner content size of each pane (excluding border + padding).
-func (m model) dims() (sideW, sideH, outW, outH int) {
+func (m app) dims() (sideW, sideH, outW, outH int) {
 	bodyH := m.h - footerRows
 	sideW = max(sidebarWidth-paneChromeW, 1)
 	outW = max(m.w-sidebarWidth-paneChromeW, 1)
@@ -327,7 +326,7 @@ func (m model) dims() (sideW, sideH, outW, outH int) {
 	return
 }
 
-func (m model) View() tea.View {
+func (m app) View() tea.View {
 	if !m.terminal.Ready() {
 		return altView("loading...")
 	}
@@ -337,13 +336,13 @@ func (m model) View() tea.View {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	switch m.mode { // popup floating over the view
 	case modeAuth:
-		body = components.Center(body, m.auth.View())
+		body = common.Center(body, m.auth.View())
 	case modeAdd:
-		body = components.Center(body, m.add.View())
+		body = common.Center(body, m.add.View())
 	case modeForget:
-		body = components.Center(body, m.forgetView())
+		body = common.Center(body, m.forgetView())
 	case modeDisconnect:
-		body = components.Center(body, m.disconnectView())
+		body = common.Center(body, m.disconnectView())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys))
 }
@@ -357,22 +356,22 @@ func altView(content string) tea.View {
 }
 
 // forgetView renders the confirm-forget popup floating over the main view.
-func (m model) forgetView() string {
+func (m app) forgetView() string {
 	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
-		components.Hint.Render("y/enter: forget · n/esc: cancel")
-	return components.Dialog{Title: "forget credentials", Width: forgetInnerW}.Render(body)
+		common.Hint.Render("y/enter: forget · n/esc: cancel")
+	return common.Dialog{Title: "forget credentials", Width: forgetInnerW}.Render(body)
 }
 
 // disconnectView renders the confirm-disconnect popup floating over the main view.
-func (m model) disconnectView() string {
+func (m app) disconnectView() string {
 	body := "Disconnect from\n\"" + m.terminal.ActiveName() + "\"?\n\n" +
-		components.Hint.Render("y/enter: disconnect · n/esc: cancel")
-	return components.Dialog{Title: "disconnect", Width: disconnectInnerW}.Render(body)
+		common.Hint.Render("y/enter: disconnect · n/esc: cancel")
+	return common.Dialog{Title: "disconnect", Width: disconnectInnerW}.Render(body)
 }
 
-func (m model) statusLine() string {
+func (m app) statusLine() string {
 	line := " " + m.terminal.State().Badge()
-	if m.terminal.State() == models.StateError && m.terminal.Err() != "" {
+	if m.terminal.State() == StateError && m.terminal.Err() != "" {
 		line += nameStyle.Render(": " + m.terminal.Err())
 	} else if name := m.terminal.ActiveName(); name != "" {
 		line += "  " + nameStyle.Render(name)

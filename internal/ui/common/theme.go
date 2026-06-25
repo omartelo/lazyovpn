@@ -1,4 +1,4 @@
-package components
+package common
 
 import "charm.land/lipgloss/v2"
 

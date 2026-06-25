@@ -1,5 +1,5 @@
-// Package components holds reusable lipgloss render helpers shared across panels.
-package components
+// Package common holds reusable lipgloss render helpers shared across panels.
+package common
 
 import (
 	"strings"

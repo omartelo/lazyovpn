@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/omartelo/lazyovpn/internal/tui"
+	"github.com/omartelo/lazyovpn/internal/ui/model"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
@@ -27,7 +27,7 @@ func main() {
 
 			mgr := vpn.NewManager()
 			// v2: alt screen is declarative — set in the model's View(), not here.
-			p := tea.NewProgram(tui.New(configs, mgr))
+			p := tea.NewProgram(model.New(configs, mgr))
 			_, err = p.Run()
 			return err
 		},

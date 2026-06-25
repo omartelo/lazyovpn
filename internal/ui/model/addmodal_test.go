@@ -1,11 +1,11 @@
-package models
+package model
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/omartelo/lazyovpn/internal/tui/utils"
+	"github.com/omartelo/lazyovpn/internal/ui/utils"
 )
 
 func TestAddModalStoresPath(t *testing.T) {

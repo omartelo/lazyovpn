@@ -36,24 +36,25 @@ internal/files/picker.go         native file-chooser (zenity/kdialog) resolution
 internal/files/copy.go           generic Copy(src, dst, perm)
 internal/vpn/vpn.go              config discovery + import, auth detection, privileged openvpn process management
 internal/vpn/keyring.go          opt-in credential storage in the OS keyring (Save/Load/ForgetCreds)
-internal/tui/tui.go              root model: global state, layout, key routing, mode switch, composition
-internal/tui/components/box.go   reusable TitledBox (title inlined into the top border)
-internal/tui/components/overlay.go Overlay/Center: lipgloss v2 layer compositing for floating popups
-internal/tui/components/theme.go shared color palette + Hint style
-internal/tui/utils/stream.go     shared plumbing: LogMsg/LogClosedMsg/WaitForLog
-internal/tui/utils/picker.go     bubbletea glue for the file chooser: PickFile cmd + FilePickedMsg
-internal/tui/models/sidebar.go   connection-list panel (bubbles/list + selection/filter + AddConfig)
-internal/tui/models/terminal.go  output panel (viewport + per-connection buffers + ConnState/Badge)
-internal/tui/models/authmodal.go credential modal (two textinputs; password masked, never persisted)
-internal/tui/models/addmodal.go  import-connection modal (launches the file chooser, confirms on enter)
+internal/ui/common/box.go        reusable TitledBox (title inlined into the top border)
+internal/ui/common/overlay.go    Overlay/Center: lipgloss v2 layer compositing for floating popups
+internal/ui/common/dialog.go     Dialog: centered, auto-sizing popup box (wraps TitledBox + Center)
+internal/ui/common/theme.go      shared color palette + Hint style
+internal/ui/utils/stream.go      shared plumbing: LogMsg/LogClosedMsg/WaitForLog
+internal/ui/utils/picker.go      bubbletea glue for the file chooser: PickFile cmd + FilePickedMsg
+internal/ui/model/ui.go          root model: global state, layout, key routing, mode switch, composition
+internal/ui/model/sidebar.go     connection-list panel (bubbles/list + selection/filter + AddConfig)
+internal/ui/model/terminal.go    output panel (viewport + per-connection buffers + ConnState/Badge)
+internal/ui/model/authmodal.go   credential modal (two textinputs; password masked, never persisted)
+internal/ui/model/addmodal.go    import-connection modal (launches the file chooser, confirms on enter)
 ```
 
 The TUI is split into packages so each panel owns its own state and business
 rules, and new views can be added without touching the others. The import graph
 has no cycles: `files` (OS file helpers) depends on nothing internal;
-`components` depends on nothing internal; `utils` depends on `files`; `vpn`
-depends on `files`; `models` depends on `components`, `utils`, `vpn`; the root
-`tui` package depends on `models`, `utils`, `vpn`. The split line for files:
+`common` depends on nothing internal; `utils` depends on `files`; `vpn`
+depends on `files`; `model` (the root model `ui.go` plus the per-panel
+sub-models) depends on `common`, `utils`, `vpn`. The split line for files:
 `vpn` knows *what an OpenVPN config is* (discover/import/auth); `files` knows
 *how to talk to the OS about files* (chooser/copy). Each panel renders its own
 bordered box; the root only places panels and routes messages.
@@ -72,14 +73,14 @@ bordered box; the root only places panels and routes messages.
 - **Saved credentials (opt-in)**: `keyring.go` wraps `github.com/zalando/go-keyring` (Secret Service / libsecret on Linux, pure-Go D-Bus, no cgo). `SaveCreds(name, user, pass)` stores `"user\npass"` under service `lazyovpn`; `LoadCreds(name)` returns `(user, pass, ok, err)` — `ok=false` with nil err when nothing is stored; `ForgetCreds(name)` deletes (missing is a no-op). Saving is only ever triggered by the modal's explicit save toggle. Keyring calls run **inline** on the UI goroutine — fine while the login keyring is unlocked (the usual case); move to a `tea.Cmd` if a locked keyring ever hangs the UI. Tested via `keyring.MockInit()`.
 - Teardown is **async**: `stop()` only `Kill`s and closes a `done` channel; the scanner goroutine reaps on EOF. Switching connections can briefly overlap two `openvpn` processes.
 
-### `internal/tui` — root model + panels
+### `internal/ui/model` — root model + panels
 
-- Layout: bordered sidebar (`models.Sidebar`) + bordered output pane (`models.Terminal`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
-- **Modes**: the root `model` has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`/`modeForget`). An open modal owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` first tries `vpn.LoadCreds` — saved creds skip the prompt and connect straight away; otherwise the credential modal (`models.AuthModal`) opens. Inside it, `enter` hands creds to `Connect` and clears them (and, if the save toggle is on — `ctrl+s` — calls `vpn.SaveCreds` best-effort first), `esc` cancels. `modeForget`: in normal mode `x` on a connection with saved creds opens a confirm popup (`forgetView`, no sub-model — rendered inline); `y`/`enter` calls `vpn.ForgetCreds`, `n`/`esc` backs out. With nothing stored `x` is a no-op (no popup). `modeAdd`: `a` opens the import modal (`models.AddModal`), which immediately launches the native file chooser (`utils.PickFile`); when `FilePickedMsg` arrives the modal shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Modals float over the live view via `components.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
-- **Charm v2 stack**: bubbletea, bubbles, and lipgloss are all **v2** (`charm.land/...`). v2 gotchas: `Model.View()` returns a `tea.View` (not a string) — wrap content with the `altView` helper, which also sets `v.AltScreen = true` (alt screen is declarative per-frame in v2, not a `NewProgram` option); key presses arrive as `tea.KeyPressMsg` (`tea.KeyMsg` is now an interface), matched via `.String()`. Compositing for the popup uses lipgloss v2 `Canvas`/`Layer` behind `components.Overlay`/`Center`.
+- Layout: bordered sidebar (`model.Sidebar`) + bordered output pane (`model.Terminal`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
+- **Modes**: the root model (the `app` struct in `ui.go`) has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`/`modeForget`/`modeDisconnect`). An open modal owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` first tries `vpn.LoadCreds` — saved creds skip the prompt and connect straight away; otherwise the credential modal (`model.AuthModal`) opens. Inside it, `enter` hands creds to `Connect` and clears them (and, if the save toggle is on — `ctrl+s` — calls `vpn.SaveCreds` best-effort first), `esc` cancels. `modeForget`: in normal mode `x` on a connection with saved creds opens a confirm popup (`forgetView`, no sub-model — rendered inline); `y`/`enter` calls `vpn.ForgetCreds`, `n`/`esc` backs out. With nothing stored `x` is a no-op (no popup). `modeDisconnect`: in normal mode `d` on a live connection (`logCh != nil`) opens a confirm popup (`disconnectView`, no sub-model — rendered inline like `forgetView`); `y`/`enter` tears the tunnel down, `n`/`esc` backs out, and with nothing connected `d` is a no-op (no popup). `modeAdd`: `a` opens the import modal (`model.AddModal`), which immediately launches the native file chooser (`utils.PickFile`); when `FilePickedMsg` arrives the modal shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Modals float over the live view via `common.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
+- **Charm v2 stack**: bubbletea, bubbles, and lipgloss are all **v2** (`charm.land/...`). v2 gotchas: `Model.View()` returns a `tea.View` (not a string) — wrap content with the `altView` helper, which also sets `v.AltScreen = true` (alt screen is declarative per-frame in v2, not a `NewProgram` option); key presses arrive as `tea.KeyPressMsg` (`tea.KeyMsg` is now an interface), matched via `.String()`. Compositing for the popup uses lipgloss v2 `Canvas`/`Layer` behind `common.Overlay`/`Center`.
 - **Log streaming**: `utils.WaitForLog(ch)` is a `tea.Cmd` that blocks on the channel and emits `utils.LogMsg`/`utils.LogClosedMsg`; each handler re-issues it to pump the next line.
 - **Per-connection output**: `Terminal.buffers` keeps each connection's log. The active connection keeps filling its buffer even when another is selected; navigating the list (`Terminal.ShowBuffer`) swaps which buffer the viewport shows.
-- **Connection state**: `models.ConnState` badge (`connecting…`→`connected`→`disconnected`/`error`). `connected` is detected by scanning log lines for `connectedMarker` (`"Initialization Sequence Completed"`), openvpn's real tunnel-up signal — not by process start.
+- **Connection state**: `model.ConnState` badge (`connecting…`→`connected`→`disconnected`/`error`). `connected` is detected by scanning log lines for `connectedMarker` (`"Initialization Sequence Completed"`), openvpn's real tunnel-up signal — not by process start.
 
 ## Hard invariants — never break these
 
