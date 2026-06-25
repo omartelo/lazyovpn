@@ -25,6 +25,8 @@ const (
 	footerRows = 2 // rows reserved below the panes: status line + help line
 
 	forgetInnerW = 54 // confirm-forget popup inner width (height auto-fits)
+
+	disconnectInnerW = 54 // confirm-disconnect popup inner width (height auto-fits)
 )
 
 var (
@@ -39,10 +41,11 @@ const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · a: add
 type appMode int
 
 const (
-	modeNormal appMode = iota
-	modeAuth           // credential modal is capturing input
-	modeAdd            // import-connection modal is open
-	modeForget         // confirm forgetting saved credentials
+	modeNormal     appMode = iota
+	modeAuth               // credential modal is capturing input
+	modeAdd                // import-connection modal is open
+	modeForget             // confirm forgetting saved credentials
+	modeDisconnect         // confirm tearing down the live connection
 )
 
 type model struct {
@@ -104,6 +107,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateAdd(msg)
 	case modeForget:
 		return m.updateForget(msg)
+	case modeDisconnect:
+		return m.updateDisconnect(msg)
 	}
 
 	if key, ok := msg.(tea.KeyPressMsg); ok && !m.sidebar.Filtering() {
@@ -117,10 +122,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.enter()
 		case "d":
-			_ = m.mgr.Disconnect()
-			m.terminal.MarkDisconnected()
-			m.logCh = nil
-			m.syncSidebar()
+			// Disconnecting tears down a live tunnel, so confirm first. Only prompt
+			// when something is actually connected (logCh != nil); otherwise d is a
+			// no-op — nothing to disconnect.
+			if m.logCh != nil {
+				m.mode = modeDisconnect
+			}
 			return m, nil
 		case "x":
 			// Forget saved creds for the selected connection (e.g. after a
@@ -206,6 +213,26 @@ func (m model) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeNormal
 	case "n", "esc":
 		m.forgetName = ""
+		m.mode = modeNormal
+	}
+	return m, nil
+}
+
+// updateDisconnect handles the confirm-disconnect popup. y/enter tears down the
+// live connection; n/esc backs out and leaves it running.
+func (m model) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	switch key.String() {
+	case "y", "enter":
+		_ = m.mgr.Disconnect()
+		m.terminal.MarkDisconnected()
+		m.logCh = nil
+		m.syncSidebar()
+		m.mode = modeNormal
+	case "n", "esc":
 		m.mode = modeNormal
 	}
 	return m, nil
@@ -315,6 +342,8 @@ func (m model) View() tea.View {
 		body = components.Center(body, m.add.View())
 	case modeForget:
 		body = components.Center(body, m.forgetView())
+	case modeDisconnect:
+		body = components.Center(body, m.disconnectView())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(helpKeys))
 }
@@ -332,6 +361,13 @@ func (m model) forgetView() string {
 	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
 		components.Hint.Render("y/enter: forget · n/esc: cancel")
 	return components.Dialog{Title: "forget credentials", Width: forgetInnerW}.Render(body)
+}
+
+// disconnectView renders the confirm-disconnect popup floating over the main view.
+func (m model) disconnectView() string {
+	body := "Disconnect from\n\"" + m.terminal.ActiveName() + "\"?\n\n" +
+		components.Hint.Render("y/enter: disconnect · n/esc: cancel")
+	return components.Dialog{Title: "disconnect", Width: disconnectInnerW}.Render(body)
 }
 
 func (m model) statusLine() string {

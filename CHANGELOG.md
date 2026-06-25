@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Disconnecting (`d`) now asks for confirmation before tearing down a live
+  connection — `y`/`enter` confirms, `n`/`esc` cancels. With nothing connected,
+  `d` stays a no-op (no popup).
+
 ## [0.2.0] - 2026-06-24
 
 ### Added

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/zalando/go-keyring"
 
+	"github.com/omartelo/lazyovpn/internal/tui/models"
 	"github.com/omartelo/lazyovpn/internal/tui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
@@ -195,6 +196,65 @@ func TestForgetCancelKeeps(t *testing.T) {
 	}
 	if _, _, ok, _ := vpn.LoadCreds("vpn"); !ok {
 		t.Error("credentials deleted after cancelling forget")
+	}
+}
+
+// "d" with a live connection opens the confirm-disconnect popup; confirming
+// tears the connection down (clears the live channel, flips to disconnected).
+func TestDisconnectConfirmTearsDown(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+	m.terminal.StartConnection("alpha")
+	m.logCh = make(chan string) // simulate a live stream without spawning openvpn
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	mm := out.(model)
+	if mm.mode != modeDisconnect {
+		t.Fatalf("mode = %v after d while connected, want modeDisconnect", mm.mode)
+	}
+
+	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	done := out.(model)
+	if done.mode != modeNormal {
+		t.Errorf("mode = %v after confirm, want modeNormal", done.mode)
+	}
+	if done.logCh != nil {
+		t.Error("logCh still set after confirming disconnect, want nil")
+	}
+	if done.terminal.State() != models.StateDisconnected {
+		t.Errorf("state = %v after disconnect, want disconnected", done.terminal.State())
+	}
+}
+
+// Cancelling the confirm-disconnect popup leaves the connection live.
+func TestDisconnectCancelKeepsConnection(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+	m.terminal.StartConnection("alpha")
+	m.logCh = make(chan string)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})      // open confirm
+	out, _ = out.(model).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
+	kept := out.(model)
+	if kept.mode != modeNormal {
+		t.Errorf("mode = %v after cancel, want modeNormal", kept.mode)
+	}
+	if kept.logCh == nil {
+		t.Error("logCh cleared after cancelling disconnect, want it kept")
+	}
+}
+
+// "d" with nothing connected is a no-op — no popup (logCh is nil).
+func TestDisconnectNoConnectionNoPopup(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(model)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if got := out.(model).mode; got != modeNormal {
+		t.Errorf("mode = %v with no connection, want modeNormal (no popup)", got)
 	}
 }
 
