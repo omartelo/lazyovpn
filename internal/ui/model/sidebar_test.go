@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"charm.land/bubbles/v2/list"
-
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
@@ -17,7 +15,7 @@ func sampleConfigs() []vpn.Config {
 }
 
 func TestSidebarSelection(t *testing.T) {
-	s := NewSidebar(sampleConfigs())
+	s := NewSidebar(sampleConfigs(), &shared{})
 
 	if got := s.SelectedName(); got != "alpha" {
 		t.Errorf("SelectedName() = %q, want alpha", got)
@@ -30,49 +28,96 @@ func TestSidebarSelection(t *testing.T) {
 	if cfg.Name != "alpha" || cfg.Path != "/etc/openvpn/alpha.ovpn" {
 		t.Errorf("SelectedConfig() = %+v, want alpha config", cfg)
 	}
+}
 
-	if s.Filtering() {
-		t.Error("Filtering() = true on a fresh list, want false")
+func TestSidebarMoveClamps(t *testing.T) {
+	s := NewSidebar(sampleConfigs(), &shared{}) // alpha, beta
+
+	s.Move(-1) // already at the top
+	if got := s.SelectedName(); got != "alpha" {
+		t.Errorf("Move(-1) at top = %q, want alpha (clamped)", got)
+	}
+
+	s.Move(1)
+	if got := s.SelectedName(); got != "beta" {
+		t.Errorf("Move(1) = %q, want beta", got)
+	}
+
+	s.Move(5) // past the end
+	if got := s.SelectedName(); got != "beta" {
+		t.Errorf("Move past end = %q, want beta (clamped)", got)
 	}
 }
 
-func TestConnDelegateMarksConnected(t *testing.T) {
-	items := []list.Item{item{Name: "alpha"}, item{Name: "beta"}}
-	l := list.New(items, connDelegate{connectedName: "alpha"}, 20, 4)
-	d := connDelegate{connectedName: "alpha"}
+// rowKind decides the per-row style; the cursor wins when it overlaps the
+// connected row.
+func TestSidebarRowKind(t *testing.T) {
+	s := NewSidebar(sampleConfigs(), &shared{}) // cursor = 0
 
-	var connected, plain strings.Builder
-	d.Render(&connected, l, 0, item{Name: "alpha"})
-	d.Render(&plain, l, 1, item{Name: "beta"})
-
-	if !strings.Contains(connected.String(), "●") {
-		t.Error("connected item should render the ● marker")
+	if k := s.rowKind(0, false); k != rowCursor {
+		t.Errorf("rowKind(cursor) = %d, want rowCursor", k)
 	}
-	if strings.Contains(plain.String(), "●") {
-		t.Error("non-connected item should not render the ● marker")
+	if k := s.rowKind(1, true); k != rowConnected {
+		t.Errorf("rowKind(connected, non-cursor) = %d, want rowConnected", k)
+	}
+	if k := s.rowKind(0, true); k != rowCursor {
+		t.Errorf("rowKind(cursor that is also connected) = %d, want rowCursor (cursor wins)", k)
+	}
+	if k := s.rowKind(1, false); k != rowPlain {
+		t.Errorf("rowKind(plain) = %d, want rowPlain", k)
+	}
+}
+
+// The ● marker tracks shared.connected and lands on the connected row only;
+// flipping the shared field repaints it without any setter call.
+func TestSidebarMarksConnected(t *testing.T) {
+	sh := &shared{connected: "alpha"}
+	s := NewSidebar(sampleConfigs(), sh)
+	s.SetSize(20, 4)
+
+	var alphaLine, betaLine string
+	for _, ln := range strings.Split(s.View(true), "\n") {
+		if strings.Contains(ln, "alpha") {
+			alphaLine = ln
+		}
+		if strings.Contains(ln, "beta") {
+			betaLine = ln
+		}
+	}
+	if !strings.Contains(alphaLine, "●") {
+		t.Error("connected row (alpha) should show the ● marker")
+	}
+	if strings.Contains(betaLine, "●") {
+		t.Error("non-connected row (beta) should not show the ● marker")
+	}
+
+	sh.connected = "" // pull, not push: clearing shared clears the marker
+	if strings.Contains(s.View(true), "●") {
+		t.Error("no ● expected once nothing is connected")
 	}
 }
 
 func TestSidebarAddConfig(t *testing.T) {
-	s := NewSidebar(sampleConfigs()) // alpha, beta
+	s := NewSidebar(sampleConfigs(), &shared{}) // alpha, beta
 	s.AddConfig(vpn.Config{Name: "gamma", Path: "/etc/openvpn/gamma.ovpn"})
-	if got := len(s.list.Items()); got != 3 {
-		t.Fatalf("items = %d after add, want 3", got)
+	if got := len(s.configs); got != 3 {
+		t.Fatalf("configs = %d after add, want 3", got)
 	}
 
 	// re-adding the same path is a no-op (dedup)
 	s.AddConfig(vpn.Config{Name: "gamma", Path: "/etc/openvpn/gamma.ovpn"})
-	if got := len(s.list.Items()); got != 3 {
-		t.Errorf("items = %d after duplicate add, want 3", got)
+	if got := len(s.configs); got != 3 {
+		t.Errorf("configs = %d after duplicate add, want 3", got)
 	}
 }
 
 func TestSidebarEmpty(t *testing.T) {
-	s := NewSidebar(nil)
+	s := NewSidebar(nil, &shared{})
 	if got := s.SelectedName(); got != "" {
 		t.Errorf("SelectedName() = %q, want empty", got)
 	}
 	if _, ok := s.SelectedConfig(); ok {
 		t.Error("SelectedConfig() ok = true on empty list, want false")
 	}
+	s.Move(1) // must not panic on an empty list
 }

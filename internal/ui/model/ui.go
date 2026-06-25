@@ -42,7 +42,7 @@ var (
 )
 
 // helpKeys is the keybinding footer, lazydocker style.
-const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · a: add · d: disconnect · x: forget creds · q: quit"
+const helpKeys = "↑/↓ j/k: navigate · enter: connect · a: add · d: disconnect · x: forget creds · q: quit"
 
 // appMode is the top-level interaction mode: which overlay (if any) currently
 // owns input. modeNormal routes keys to the panels; every other mode means a
@@ -57,6 +57,14 @@ const (
 	modeForget             // confirm forgetting saved credentials
 	modeDisconnect         // confirm tearing down the live connection
 )
+
+// shared is the global UI state the panels read by pointer (crush's
+// common.Common, scaled to a single field). The sidebar reads connected live at
+// render time, so flipping it is enough to repaint the ● marker — no setter, no
+// delegate rebuild.
+type shared struct {
+	connected string // name of the live connection, "" if none
+}
 
 // UI is the sole bubbletea model: the central brain. It holds the panels it
 // drives, the active interaction mode, and the shared runtime state (the VPN
@@ -73,19 +81,18 @@ type UI struct {
 	forgetName string     // connection whose saved creds the forget modal targets
 	mgr        *vpn.Manager
 	logCh      <-chan string // live stream of the active connection
-	markedConn string        // connection currently flagged connected in the sidebar
+	sh         shared        // global state the panels read by pointer
 	w, h       int
 }
 
 // New builds the initial UI from the already-discovered configs.
 func New(configs []vpn.Config, mgr *vpn.Manager) *UI {
-	return &UI{
-		sidebar:  NewSidebar(configs),
-		terminal: NewTerminal(),
-		auth:     NewAuthModal(),
-		add:      NewAddModal(),
-		mgr:      mgr,
-	}
+	m := &UI{mgr: mgr}
+	m.sidebar = NewSidebar(configs, &m.sh) // sidebar reads m.sh.connected by pointer
+	m.terminal = NewTerminal()
+	m.auth = NewAuthModal()
+	m.add = NewAddModal()
+	return m
 }
 
 func (m *UI) Init() tea.Cmd { return nil }
@@ -102,14 +109,14 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // log from an old connection
 		}
 		m.terminal.AppendLog(msg.Line)
-		m.syncSidebar() // tunnel-up flips the sidebar marker green
+		m.syncConnected() // tunnel-up flips the sidebar marker green
 		return m, utils.WaitForLog(m.logCh)
 
 	case utils.LogClosedMsg:
 		if msg.Ch == m.logCh {
 			m.terminal.MarkClosed()
 			m.logCh = nil
-			m.syncSidebar()
+			m.syncConnected()
 		}
 		return m, nil
 	}
@@ -126,7 +133,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDisconnect(msg)
 	}
 
-	if key, ok := msg.(tea.KeyPressMsg); ok && !m.sidebar.Filtering() {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "q", "ctrl+c":
 			_ = m.mgr.Disconnect()
@@ -158,14 +165,21 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Navigation (j/k/arrows come from the list). On selection change, show that
-	// connection's output.
+	// Navigation: move the cursor on j/k/arrows; show the newly selected
+	// connection's output when the selection changes.
 	prev := m.sidebar.SelectedName()
-	cmd := m.sidebar.Handle(msg)
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "up", "k":
+			m.sidebar.Move(-1)
+		case "down", "j":
+			m.sidebar.Move(1)
+		}
+	}
 	if sel := m.sidebar.SelectedName(); sel != prev {
 		m.terminal.ShowBuffer(sel)
 	}
-	return m, cmd
+	return m, nil
 }
 
 // updateAuth handles input while the credential modal is open.
@@ -242,7 +256,7 @@ func (m *UI) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = m.mgr.Disconnect()
 		m.terminal.MarkDisconnected()
 		m.logCh = nil
-		m.syncSidebar()
+		m.syncConnected()
 		m.mode = modeNormal
 	case "n", "esc":
 		m.mode = modeNormal
@@ -300,20 +314,19 @@ func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 	}
 	m.logCh = ch
 	m.terminal.StartConnection(cfg.Name)
-	m.syncSidebar() // a fresh connect clears any previous green marker
+	m.syncConnected() // a fresh connect clears any previous green marker
 	return m, utils.WaitForLog(ch)
 }
 
-// syncSidebar flags the connected connection in the list, but only on a real
-// state change (avoids rebuilding the delegate on every log line).
-func (m *UI) syncSidebar() {
-	name := ""
+// syncConnected mirrors the terminal's connected state into the shared state
+// the sidebar reads, so the ● marker tracks the live tunnel. Pull, not push:
+// the sidebar re-reads m.sh.connected every frame, so there is nothing to
+// rebuild — just flip the field.
+func (m *UI) syncConnected() {
 	if m.terminal.State() == StateConnected {
-		name = m.terminal.ActiveName()
-	}
-	if name != m.markedConn {
-		m.markedConn = name
-		m.sidebar.SetConnected(name)
+		m.sh.connected = m.terminal.ActiveName()
+	} else {
+		m.sh.connected = ""
 	}
 }
 

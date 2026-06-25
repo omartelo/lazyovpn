@@ -53,15 +53,23 @@ helpers `UI` owns and calls directly.
 | Panel        | File                 | Shape                                          |
 | ------------ | -------------------- | ---------------------------------------------- |
 | `Terminal`   | `model/terminal.go`  | Imperative ✓ — targeted methods, no `Handle`   |
-| `Sidebar`    | `model/sidebar.go`   | Imperative ✓ — `Handle(msg)` forwards to the embedded `list` |
+| `Sidebar`    | `model/sidebar.go`   | Imperative ✓ — hand-rolled (no bubbles list/delegate); `UI.Update` drives the cursor via `Move`, reads `shared.connected` by pointer |
 | `AuthModal`  | `model/authmodal.go` | Imperative ✓ — `Handle(msg)` routes to the focused field |
 | `AddModal`   | `model/addmodal.go`  | Imperative ✓ — `Handle(msg)` records the pick  |
 
-No panel has an Elm `Update(tea.Msg) (T, tea.Cmd)`. The ones that need to
-forward a raw message to a wrapped bubble (`Sidebar`, `AuthModal`) expose a
-pointer-receiver `Handle(msg tea.Msg) tea.Cmd` that mutates in place and returns
-any command; `UI.Update` calls it and does not reassign. Keep this — never add a
-sub-model that returns a new copy of itself.
+No panel has an Elm `Update(tea.Msg) (T, tea.Cmd)`. A panel that must forward a
+raw message to a wrapped bubble (`AuthModal` → its textinputs) exposes a
+pointer-receiver `Handle(msg tea.Msg) tea.Cmd` that mutates in place; `UI.Update`
+calls it and does not reassign. Never add a sub-model that returns a new copy of
+itself.
+
+`UI` is a **pointer** model (`*UI`, pointer receivers). That lets panels read
+global state by pointer rather than being pushed to: `shared{connected}` is held
+on `UI` and handed to the sidebar as `&m.sh`; the sidebar reads it live at render
+time, so flipping the field repaints the ● — no setter, no rebuild. The sidebar
+is hand-rolled because the app has exactly one list; if a second list view ever
+lands, extract a small list component (model it on crush's `Item.Render(width)`,
+not its 23 KB machinery).
 
 ## Conventions
 

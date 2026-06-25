@@ -5,140 +5,123 @@ package model
 
 import (
 	"fmt"
-	"io"
+	"strings"
 
-	"charm.land/bubbles/v2/list"
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/ui/common"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
-// item adapts vpn.Config to the bubbles list.
-type item vpn.Config
-
-func (i item) Title() string       { return i.Name }
-func (i item) Description() string { return i.Path }
-func (i item) FilterValue() string { return i.Name }
-
 var (
-	connectedStyle = lipgloss.NewStyle().Foreground(common.Connected)         // green ● marker + connected row
+	connectedStyle = lipgloss.NewStyle().Foreground(common.Connected)         // green ● + connected row
 	itemSelected   = lipgloss.NewStyle().Foreground(common.Accent).Bold(true) // pink cursor row
 	itemNormal     = lipgloss.NewStyle()
 )
 
-// connDelegate renders one connection per row: a green ● prefix and green text
-// on the connected entry, the pink cursor highlight on the selected one.
-type connDelegate struct {
-	connectedName string
-}
+// rowKind classifies a sidebar row for styling.
+type rowKind uint8
 
-func (d connDelegate) Height() int                         { return 1 }
-func (d connDelegate) Spacing() int                        { return 0 } // blank rows between entries (0 = none)
-func (d connDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+const (
+	rowPlain     rowKind = iota
+	rowCursor            // the highlighted row
+	rowConnected         // the live connection (when it is not also the cursor)
+)
 
-func (d connDelegate) Render(w io.Writer, m list.Model, index int, li list.Item) {
-	it, ok := li.(item)
-	if !ok {
-		return
-	}
-	connected := it.Name == d.connectedName
-
-	marker := "  " // keep names aligned whether or not the dot is shown
-	if connected {
-		marker = connectedStyle.Render("●") + " "
-	}
-
-	style := itemNormal
-	switch {
-	case index == m.Index():
-		style = itemSelected
-	case connected:
-		style = connectedStyle
-	}
-
-	line := lipgloss.NewStyle().MaxWidth(m.Width()).Render(marker + style.Render(it.Name))
-	fmt.Fprint(w, line)
-}
-
-// Sidebar is the connection list panel.
+// Sidebar is the connection-list panel. It renders the discovered configs
+// directly — a cursor row, a green ● on the connected one (read live from the
+// shared state) — with no bubbles list or delegate behind it. One list in the
+// whole app means hand-rolling beats a generic list component; extract one only
+// if a second list view ever appears.
 type Sidebar struct {
-	list list.Model
-	w, h int // inner content size (inside the border)
+	configs []vpn.Config
+	cursor  int // highlighted row
+	w, h    int // inner content size (inside the border)
+	sh      *shared
 }
 
-// NewSidebar builds the sidebar from the discovered configs.
-func NewSidebar(configs []vpn.Config) Sidebar {
-	items := make([]list.Item, len(configs))
-	for i, c := range configs {
-		items[i] = item(c)
-	}
-
-	l := list.New(items, connDelegate{}, 0, 0)
-	l.SetShowTitle(false)     // pane title lives in the border now
-	l.SetShowStatusBar(false) // count goes in the border title
-	l.SetShowHelp(false)
-
-	return Sidebar{list: l}
-}
-
-// SetConnected marks name as the live connection (green ● + green row), or
-// clears the marker when name is "".
-func (s *Sidebar) SetConnected(name string) {
-	s.list.SetDelegate(connDelegate{connectedName: name})
-}
-
-// AddConfig appends a freshly imported config to the list, skipping it if a
-// config with the same path is already listed.
-func (s *Sidebar) AddConfig(c vpn.Config) {
-	for _, li := range s.list.Items() {
-		if existing, ok := li.(item); ok && existing.Path == c.Path {
-			return
-		}
-	}
-	s.list.InsertItem(len(s.list.Items()), item(c))
+// NewSidebar builds the sidebar from the discovered configs, reading the live
+// connection name from the shared state by pointer.
+func NewSidebar(configs []vpn.Config, sh *shared) Sidebar {
+	return Sidebar{configs: configs, sh: sh}
 }
 
 // SetSize sets the inner content size (inside the border).
-func (s *Sidebar) SetSize(w, h int) {
-	s.w, s.h = w, h
-	s.list.SetSize(w, h)
+func (s *Sidebar) SetSize(w, h int) { s.w, s.h = w, h }
+
+// Move shifts the cursor by delta, clamped to the list.
+func (s *Sidebar) Move(delta int) {
+	if len(s.configs) == 0 {
+		return
+	}
+	s.cursor = max(0, min(s.cursor+delta, len(s.configs)-1))
 }
 
-// Handle forwards a message to the embedded list (navigation, filtering) and
-// returns any command it emits. Imperative: it mutates the sidebar in place, so
-// the caller does not reassign — see internal/ui/CLAUDE.md.
-func (s *Sidebar) Handle(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-	s.list, cmd = s.list.Update(msg)
-	return cmd
-}
-
-// View renders the bordered panel.
-func (s Sidebar) View(focused bool) string {
-	title := fmt.Sprintf("connections (%d)", len(s.list.Items()))
-	return common.TitledBox(title, s.list.View(), s.w, s.h, focused)
+// AddConfig appends a freshly imported config, skipping it if one with the same
+// path is already listed.
+func (s *Sidebar) AddConfig(c vpn.Config) {
+	for _, existing := range s.configs {
+		if existing.Path == c.Path {
+			return
+		}
+	}
+	s.configs = append(s.configs, c)
 }
 
 // SelectedConfig returns the highlighted config.
 func (s Sidebar) SelectedConfig() (vpn.Config, bool) {
-	it, ok := s.list.SelectedItem().(item)
-	if !ok {
+	if s.cursor < 0 || s.cursor >= len(s.configs) {
 		return vpn.Config{}, false
 	}
-	return vpn.Config(it), true
+	return s.configs[s.cursor], true
 }
 
 // SelectedName returns the highlighted connection name, or "".
 func (s Sidebar) SelectedName() string {
-	if it, ok := s.list.SelectedItem().(item); ok {
-		return it.Name
+	if c, ok := s.SelectedConfig(); ok {
+		return c.Name
 	}
 	return ""
 }
 
-// Filtering reports whether the list is currently capturing filter input.
-func (s Sidebar) Filtering() bool {
-	return s.list.FilterState() == list.Filtering
+// rowKind classifies row i for styling: the cursor wins over the connected
+// marker when they fall on the same row.
+func (s Sidebar) rowKind(i int, connected bool) rowKind {
+	switch {
+	case i == s.cursor:
+		return rowCursor
+	case connected:
+		return rowConnected
+	}
+	return rowPlain
+}
+
+// View renders the bordered panel: one row per config, the ● marker on the
+// connected one, the cursor highlight on the selected one.
+//
+// ponytail: no scroll window — a VPN config list fits the pane in practice. Add
+// a cursor-tracking visible-row offset only if a real list ever overflows.
+func (s Sidebar) View(focused bool) string {
+	title := fmt.Sprintf("connections (%d)", len(s.configs))
+
+	rows := make([]string, len(s.configs))
+	for i, c := range s.configs {
+		connected := c.Name == s.sh.connected
+
+		marker := "  " // keep names aligned whether or not the dot shows
+		if connected {
+			marker = connectedStyle.Render("●") + " "
+		}
+
+		style := itemNormal
+		switch s.rowKind(i, connected) {
+		case rowCursor:
+			style = itemSelected
+		case rowConnected:
+			style = connectedStyle
+		}
+
+		rows[i] = lipgloss.NewStyle().MaxWidth(s.w).Render(marker + style.Render(c.Name))
+	}
+	return common.TitledBox(title, strings.Join(rows, "\n"), s.w, s.h, focused)
 }
