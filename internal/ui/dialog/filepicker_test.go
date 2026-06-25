@@ -12,6 +12,9 @@ func TestFilePickerStoresPath(t *testing.T) {
 	if p.Path() != "/tmp/x.ovpn" {
 		t.Errorf("Path() = %q, want /tmp/x.ovpn", p.Path())
 	}
+	if !strings.Contains(p.View(), "/tmp/x.ovpn") {
+		t.Error("View() should show the selected path")
+	}
 }
 
 func TestFilePickerCanceledKeepsEmpty(t *testing.T) {

@@ -120,10 +120,7 @@ func TestDiscover(t *testing.T) {
 	t.Cleanup(func() { configDirs = orig })
 	configDirs = []string{sys1, sys1, sys2, "/does/not/exist"}
 
-	got, err := Discover()
-	if err != nil {
-		t.Fatalf("Discover error: %v", err)
-	}
+	got := Discover()
 
 	names := map[string]int{}
 	for _, c := range got {
