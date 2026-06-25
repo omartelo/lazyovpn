@@ -1,16 +1,28 @@
-# internal/ui/model — working guide
+# internal/ui — working guide
 
 Read the repo-root `CLAUDE.md` first for the hard invariants (the privilege
 boundary, the single `cmd.Wait()`, the stale-channel guard, "passwords never
 touch plaintext storage", English-only). This file is the *how we write code in
-this package* guide. The architecture is modelled on Charm's own `crush` TUI
+the UI tree* guide. The architecture is modelled on Charm's own `crush` TUI
 (`internal/ui/AGENTS.md` there) — they wrote bubbletea/lipgloss v2, so they set
 the pattern.
 
+## Package map
+
+- `common/` — reusable view **components** (`Dialog`, `TitledBox`,
+  `Overlay`/`Center`, the theme). Import these; add new reusable pieces here.
+- `utils/` — bubbletea glue: the file-chooser command and the log-stream pump
+  (`PickFile`, `WaitForLog`, the `LogMsg`/`LogClosedMsg` messages).
+- `model/` — the brain: `UI` (the sole bubbletea model) plus the panels it
+  drives (`Sidebar`, `Terminal`, `AuthModal`, `AddModal`).
+
+Import direction is one-way and cycle-free: `common` and `utils` depend on
+nothing in the UI tree; `model` imports both.
+
 ## Architecture
 
-`UI` (in `ui.go`) is the **sole** bubbletea model — the brain. Keep state and
-logic here. The panels are not independent Elm models; they are imperative
+`UI` (in `model/ui.go`) is the **sole** bubbletea model — the brain. Keep state
+and logic there. The panels are not independent Elm models; they are imperative
 helpers `UI` owns and calls directly.
 
 - **Centralized routing.** One `switch` in `UI.Update` dispatches everything.
@@ -23,10 +35,9 @@ helpers `UI` owns and calls directly.
   `MarkClosed`, `State`, `View`). New panels follow this — expose methods (and
   return a `tea.Cmd` when a side effect is needed), render via `View(...)`, and
   let `UI.Update` decide when to call in.
-- **Components are external.** Reusable view pieces (`Dialog`, `TitledBox`,
-  `Overlay`/`Center`, the theme) live in `../common` and are imported. Build new
-  reusable pieces there, not here. Glue commands (file chooser, log pump) live
-  in `../utils`.
+- **Components are external.** Reusable view pieces live in `common/` and are
+  imported. Build new reusable pieces there, not in `model/`. Glue commands
+  (file chooser, log pump) live in `utils/`.
 
 ## Rules (from crush's AGENTS.md, they hold here)
 
@@ -39,12 +50,12 @@ helpers `UI` owns and calls directly.
 
 ## Panels
 
-| Panel        | File           | Shape                                  |
-| ------------ | -------------- | -------------------------------------- |
-| `Terminal`   | `terminal.go`  | Imperative ✓ (the model to copy)       |
-| `Sidebar`    | `sidebar.go`   | Imperative + a legacy `Update` forwarder to the embedded `list` — **migration target** |
-| `AuthModal`  | `authmodal.go` | Imperative + a legacy `Update` — **migration target** |
-| `AddModal`   | `addmodal.go`  | Imperative + a legacy `Update` — **migration target** |
+| Panel        | File                 | Shape                                  |
+| ------------ | -------------------- | -------------------------------------- |
+| `Terminal`   | `model/terminal.go`  | Imperative ✓ (the model to copy)       |
+| `Sidebar`    | `model/sidebar.go`   | Imperative + a legacy `Update` forwarder to the embedded `list` — **migration target** |
+| `AuthModal`  | `model/authmodal.go` | Imperative + a legacy `Update` — **migration target** |
+| `AddModal`   | `model/addmodal.go`  | Imperative + a legacy `Update` — **migration target** |
 
 **Migration target:** strip the `Update(tea.Msg) (T, tea.Cmd)` Elm signature
 from `Sidebar`/`AuthModal`/`AddModal` and have `UI.Update` call targeted
