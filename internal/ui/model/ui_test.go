@@ -14,7 +14,7 @@ import (
 )
 
 func TestDims(t *testing.T) {
-	m := app{w: 100, h: 30}
+	m := UI{w: 100, h: 30}
 	sideW, sideH, outW, outH := m.dims()
 
 	if sideW != sidebarWidth-paneChromeW {
@@ -32,7 +32,7 @@ func TestDims(t *testing.T) {
 }
 
 func TestDimsClampsToMin(t *testing.T) {
-	m := app{w: 1, h: 1} // tiny terminal
+	m := UI{w: 1, h: 1} // tiny terminal
 	sideW, sideH, outW, outH := m.dims()
 	for _, v := range []int{sideW, sideH, outW, outH} {
 		if v < 1 {
@@ -46,15 +46,15 @@ func TestStaleLogIgnored(t *testing.T) {
 	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
 
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
-	foreign := make(chan string) // not the app's logCh (which is nil here)
+	foreign := make(chan string) // not the UI's logCh (which is nil here)
 	out, cmd := m.Update(utils.LogMsg{Ch: foreign, Line: "ghost"})
 	if cmd != nil {
 		t.Error("stale LogMsg produced a command, want nil")
 	}
-	if out.(app).terminal.State().Badge() == "" {
-		t.Error("app corrupted by stale log")
+	if out.(UI).terminal.State().Badge() == "" {
+		t.Error("UI corrupted by stale log")
 	}
 }
 
@@ -68,16 +68,16 @@ func TestEnterOpensAuthModal(t *testing.T) {
 
 	m := New([]vpn.Config{{Name: "vpn", Path: path}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	mm := out.(app)
+	mm := out.(UI)
 	if mm.mode != modeAuth {
 		t.Fatalf("mode = %v after enter on auth config, want modeAuth", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if got := out.(app).mode; got != modeNormal {
+	if got := out.(UI).mode; got != modeNormal {
 		t.Errorf("mode = %v after esc, want modeNormal", got)
 	}
 }
@@ -87,16 +87,16 @@ func TestEnterOpensAuthModal(t *testing.T) {
 func TestAddKeyOpensModal(t *testing.T) {
 	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	mm := out.(app)
+	mm := out.(UI)
 	if mm.mode != modeAdd {
 		t.Fatalf("mode = %v after 'a', want modeAdd", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if got := out.(app).mode; got != modeNormal {
+	if got := out.(UI).mode; got != modeNormal {
 		t.Errorf("mode = %v after esc, want modeNormal", got)
 	}
 }
@@ -114,14 +114,14 @@ func TestAddConfirmImports(t *testing.T) {
 
 	m := New(nil, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}) // open modal
-	m = out.(app)
+	m = out.(UI)
 	out, _ = m.Update(utils.FilePickedMsg{Path: src}) // chooser result
-	m = out.(app)
+	m = out.(UI)
 	out, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // import + add
-	m = out.(app)
+	m = out.(UI)
 
 	if m.mode != modeNormal {
 		t.Errorf("mode = %v after import, want modeNormal", m.mode)
@@ -139,10 +139,10 @@ func TestForgetNoSavedCredsNoPopup(t *testing.T) {
 
 	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	if got := out.(app).mode; got != modeNormal {
+	if got := out.(UI).mode; got != modeNormal {
 		t.Errorf("mode = %v with no saved creds, want modeNormal (no popup)", got)
 	}
 }
@@ -157,10 +157,10 @@ func TestForgetConfirmDeletes(t *testing.T) {
 
 	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	mm := out.(app)
+	mm := out.(UI)
 	if mm.mode != modeForget {
 		t.Fatalf("mode = %v after x with saved creds, want modeForget", mm.mode)
 	}
@@ -169,7 +169,7 @@ func TestForgetConfirmDeletes(t *testing.T) {
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if got := out.(app).mode; got != modeNormal {
+	if got := out.(UI).mode; got != modeNormal {
 		t.Errorf("mode = %v after confirm, want modeNormal", got)
 	}
 	if _, _, ok, _ := vpn.LoadCreds("vpn"); ok {
@@ -186,11 +186,11 @@ func TestForgetCancelKeeps(t *testing.T) {
 
 	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})    // open confirm
-	out, _ = out.(app).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
-	if got := out.(app).mode; got != modeNormal {
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})   // open confirm
+	out, _ = out.(UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
+	if got := out.(UI).mode; got != modeNormal {
 		t.Errorf("mode = %v after cancel, want modeNormal", got)
 	}
 	if _, _, ok, _ := vpn.LoadCreds("vpn"); !ok {
@@ -203,18 +203,18 @@ func TestForgetCancelKeeps(t *testing.T) {
 func TestDisconnectConfirmTearsDown(t *testing.T) {
 	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 	m.terminal.StartConnection("alpha")
 	m.logCh = make(chan string) // simulate a live stream without spawning openvpn
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
-	mm := out.(app)
+	mm := out.(UI)
 	if mm.mode != modeDisconnect {
 		t.Fatalf("mode = %v after d while connected, want modeDisconnect", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	done := out.(app)
+	done := out.(UI)
 	if done.mode != modeNormal {
 		t.Errorf("mode = %v after confirm, want modeNormal", done.mode)
 	}
@@ -230,13 +230,13 @@ func TestDisconnectConfirmTearsDown(t *testing.T) {
 func TestDisconnectCancelKeepsConnection(t *testing.T) {
 	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 	m.terminal.StartConnection("alpha")
 	m.logCh = make(chan string)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})    // open confirm
-	out, _ = out.(app).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
-	kept := out.(app)
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})   // open confirm
+	out, _ = out.(UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
+	kept := out.(UI)
 	if kept.mode != modeNormal {
 		t.Errorf("mode = %v after cancel, want modeNormal", kept.mode)
 	}
@@ -249,10 +249,10 @@ func TestDisconnectCancelKeepsConnection(t *testing.T) {
 func TestDisconnectNoConnectionNoPopup(t *testing.T) {
 	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
-	if got := out.(app).mode; got != modeNormal {
+	if got := out.(UI).mode; got != modeNormal {
 		t.Errorf("mode = %v with no connection, want modeNormal (no popup)", got)
 	}
 }
@@ -262,7 +262,7 @@ func TestDisconnectNoConnectionNoPopup(t *testing.T) {
 func TestStatusLine(t *testing.T) {
 	m := New(nil, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = sized.(app)
+	m = sized.(UI)
 
 	m.terminal.SetError("boom")
 	if got := m.statusLine(); !strings.Contains(got, "boom") {

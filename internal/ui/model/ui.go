@@ -1,6 +1,7 @@
-// ui.go is the root bubbletea model: a connection sidebar + a log pane. It owns
-// global app state (layout, key routing, live stream) and composes the per-panel
-// sub-models that live alongside it in this package.
+// ui.go holds UI, the sole bubbletea model and the app's brain: it owns every
+// piece of global state (mode, layout, key routing, the live log stream) and
+// drives the sidebar + log panels. Message routing is centralized in one Update
+// switch; the panels are imperative helpers it calls (see the package CLAUDE.md).
 package model
 
 import (
@@ -12,20 +13,27 @@ import (
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
 
-const (
-	sidebarWidth = 42 // sidebar pane outer width in columns
+// sidebarWidth is the sidebar pane's outer width, in columns; the log pane
+// takes the rest of the terminal width.
+const sidebarWidth = 42
 
-	// paneChromeW/H are the cells a common.TitledBox adds around its inner
-	// content: left+right border+padding (4) and top+bottom border (2). dims()
-	// subtracts them to get each pane's inner content size.
+// paneChromeW and paneChromeH are the extra cells a common.TitledBox draws
+// around its inner content: left+right border+padding (W) and top+bottom
+// border (H). dims() subtracts them to size each pane's content area.
+const (
 	paneChromeW = 4
 	paneChromeH = 2
+)
 
-	footerRows = 2 // rows reserved below the panes: status line + help line
+// footerRows is the number of rows reserved below the panes for the status
+// line and the help line.
+const footerRows = 2
 
-	forgetInnerW = 54 // confirm-forget popup inner width (height auto-fits)
-
-	disconnectInnerW = 54 // confirm-disconnect popup inner width (height auto-fits)
+// Confirm-popup inner widths, in columns. Height auto-fits the content via
+// common.Dialog, so only the width is pinned.
+const (
+	forgetInnerW     = 54
+	disconnectInnerW = 54
 )
 
 var (
@@ -36,9 +44,12 @@ var (
 // helpKeys is the keybinding footer, lazydocker style.
 const helpKeys = "↑/↓ j/k: navigate · /: filter · enter: connect · a: add · d: disconnect · x: forget creds · q: quit"
 
-// appMode is the top-level interaction mode.
-type appMode int
+// appMode is the top-level interaction mode: which overlay (if any) currently
+// owns input. modeNormal routes keys to the panels; every other mode means a
+// modal or confirm popup is up and consuming input.
+type appMode uint8
 
+// Possible appMode values.
 const (
 	modeNormal     appMode = iota
 	modeAuth               // credential modal is capturing input
@@ -47,7 +58,12 @@ const (
 	modeDisconnect         // confirm tearing down the live connection
 )
 
-type app struct {
+// UI is the sole bubbletea model: the central brain. It holds the panels it
+// drives, the active interaction mode, and the shared runtime state (the VPN
+// manager, the live log channel, terminal size). All routing and mode switching
+// happens on this type; the panels only ever see a message through a method UI
+// calls on them.
+type UI struct {
 	sidebar    Sidebar
 	terminal   Terminal
 	auth       AuthModal
@@ -61,9 +77,9 @@ type app struct {
 	w, h       int
 }
 
-// New builds the initial app from the already-discovered configs.
-func New(configs []vpn.Config, mgr *vpn.Manager) app {
-	return app{
+// New builds the initial UI from the already-discovered configs.
+func New(configs []vpn.Config, mgr *vpn.Manager) UI {
+	return UI{
 		sidebar:  NewSidebar(configs),
 		terminal: NewTerminal(),
 		auth:     NewAuthModal(),
@@ -72,9 +88,9 @@ func New(configs []vpn.Config, mgr *vpn.Manager) app {
 	}
 }
 
-func (m app) Init() tea.Cmd { return nil }
+func (m UI) Init() tea.Cmd { return nil }
 
-func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Global messages: layout and the live log stream flow regardless of mode.
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -154,7 +170,7 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateAuth handles input while the credential modal is open.
-func (m app) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m UI) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -180,7 +196,7 @@ func (m app) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateAdd handles input while the import-connection modal is open.
-func (m app) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m UI) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -200,7 +216,7 @@ func (m app) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateForget handles the confirm-forget popup. y/enter deletes the saved
 // credentials; n/esc backs out without touching the keyring.
-func (m app) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m UI) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -219,7 +235,7 @@ func (m app) updateForget(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateDisconnect handles the confirm-disconnect popup. y/enter tears down the
 // live connection; n/esc backs out and leaves it running.
-func (m app) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m UI) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -239,7 +255,7 @@ func (m app) updateDisconnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // addConfirm imports the picked file into the connections dir and appends it to
 // the sidebar. Stays open on error so the user can pick again.
-func (m app) addConfirm() (tea.Model, tea.Cmd) {
+func (m UI) addConfirm() (tea.Model, tea.Cmd) {
 	path := m.add.Path()
 	if path == "" {
 		return m, nil // nothing picked yet
@@ -256,7 +272,7 @@ func (m app) addConfirm() (tea.Model, tea.Cmd) {
 }
 
 // enter connects the selected config, prompting for credentials first if needed.
-func (m app) enter() (tea.Model, tea.Cmd) {
+func (m UI) enter() (tea.Model, tea.Cmd) {
 	cfg, ok := m.sidebar.SelectedConfig()
 	if !ok {
 		return m, nil
@@ -279,7 +295,7 @@ func (m app) enter() (tea.Model, tea.Cmd) {
 }
 
 // connect starts the connection and begins pumping its log stream.
-func (m app) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
+func (m UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
 	ch, err := m.mgr.Connect(cfg, username, password)
 	if err != nil {
 		m.terminal.SetError(err.Error())
@@ -293,7 +309,7 @@ func (m app) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 
 // syncSidebar flags the connected connection in the list, but only on a real
 // state change (avoids rebuilding the delegate on every log line).
-func (m *app) syncSidebar() {
+func (m *UI) syncSidebar() {
 	name := ""
 	if m.terminal.State() == StateConnected {
 		name = m.terminal.ActiveName()
@@ -305,7 +321,7 @@ func (m *app) syncSidebar() {
 }
 
 // layout recomputes pane sizes. Reserves footerRows below the panes.
-func (m *app) layout(w, h int) {
+func (m *UI) layout(w, h int) {
 	m.w, m.h = w, h
 	sideW, sideH, outW, outH := m.dims()
 	firstReady := !m.terminal.Ready()
@@ -317,7 +333,7 @@ func (m *app) layout(w, h int) {
 }
 
 // dims returns the inner content size of each pane (excluding border + padding).
-func (m app) dims() (sideW, sideH, outW, outH int) {
+func (m UI) dims() (sideW, sideH, outW, outH int) {
 	bodyH := m.h - footerRows
 	sideW = max(sidebarWidth-paneChromeW, 1)
 	outW = max(m.w-sidebarWidth-paneChromeW, 1)
@@ -326,7 +342,7 @@ func (m app) dims() (sideW, sideH, outW, outH int) {
 	return
 }
 
-func (m app) View() tea.View {
+func (m UI) View() tea.View {
 	if !m.terminal.Ready() {
 		return altView("loading...")
 	}
@@ -356,20 +372,20 @@ func altView(content string) tea.View {
 }
 
 // forgetView renders the confirm-forget popup floating over the main view.
-func (m app) forgetView() string {
+func (m UI) forgetView() string {
 	body := "Forget saved credentials for\n\"" + m.forgetName + "\"?\n\n" +
 		common.Hint.Render("y/enter: forget · n/esc: cancel")
 	return common.Dialog{Title: "forget credentials", Width: forgetInnerW}.Render(body)
 }
 
 // disconnectView renders the confirm-disconnect popup floating over the main view.
-func (m app) disconnectView() string {
+func (m UI) disconnectView() string {
 	body := "Disconnect from\n\"" + m.terminal.ActiveName() + "\"?\n\n" +
 		common.Hint.Render("y/enter: disconnect · n/esc: cancel")
 	return common.Dialog{Title: "disconnect", Width: disconnectInnerW}.Render(body)
 }
 
-func (m app) statusLine() string {
+func (m UI) statusLine() string {
 	line := " " + m.terminal.State().Badge()
 	if m.terminal.State() == StateError && m.terminal.Err() != "" {
 		line += nameStyle.Render(": " + m.terminal.Err())
