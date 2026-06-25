@@ -38,30 +38,32 @@ internal/vpn/vpn.go              config discovery + import, auth detection, priv
 internal/vpn/keyring.go          opt-in credential storage in the OS keyring (Save/Load/ForgetCreds)
 internal/ui/common/box.go        reusable TitledBox (title inlined into the top border)
 internal/ui/common/overlay.go    Overlay/Center: lipgloss v2 layer compositing for floating popups
-internal/ui/common/dialog.go     Dialog: centered, auto-sizing popup box (wraps TitledBox + Center)
+internal/ui/common/popup.go      Popup: auto-sizing titled box for overlay content (wraps TitledBox)
 internal/ui/common/theme.go      shared color palette + Hint style
+internal/ui/dialog/confirm.go    Confirm: reusable yes/no popup (title + message + onYes closure)
+internal/ui/dialog/filepicker.go FilePicker: native file-chooser wrapper (Open cmd + FilePickedMsg + status render)
 internal/ui/utils/stream.go      shared plumbing: LogMsg/LogClosedMsg/WaitForLog
-internal/ui/utils/picker.go      bubbletea glue for the file chooser: PickFile cmd + FilePickedMsg
 internal/ui/model/ui.go          root model: global state, layout, key routing, mode switch, composition
-internal/ui/model/sidebar.go     connection-list panel (bubbles/list + selection/filter + AddConfig)
+internal/ui/model/sidebar.go     connection-list panel (hand-rolled rows + cursor; reads shared.connected)
 internal/ui/model/terminal.go    output panel (viewport + per-connection buffers + ConnState/Badge)
 internal/ui/model/authmodal.go   credential modal (two textinputs; password masked, never persisted)
-internal/ui/model/addmodal.go    import-connection modal (launches the file chooser, confirms on enter)
+internal/ui/model/add.go         import-connection flow (drives dialog.FilePicker + vpn.ImportConfig)
 ```
 
 The TUI is split into packages so each panel owns its own state and business
 rules, and new views can be added without touching the others. The import graph
-has no cycles: `files` (OS file helpers) depends on nothing internal;
-`common` depends on nothing internal; `utils` depends on `files`; `vpn`
-depends on `files`; `model` (the root model `ui.go` plus the per-panel
-sub-models) depends on `common`, `utils`, `vpn`. The split line for files:
+has no cycles: `files` (OS file helpers) and `common` depend on nothing
+internal; `dialog` builds on `common` + `files` (the file chooser); `utils`
+depends on nothing internal (just the log pump now); `vpn` depends on `files`;
+`model` (the root model `ui.go` plus the panels) depends on `common`, `dialog`,
+`utils`, `vpn`. The split line for files:
 `vpn` knows *what an OpenVPN config is* (discover/import/auth); `files` knows
 *how to talk to the OS about files* (chooser/copy). Each panel renders its own
 bordered box; the root only places panels and routes messages.
 
 ### `internal/files` — OS file helpers
 
-- `Pick()` resolves the first installed native file-chooser dialog (`zenity`, then `kdialog`) and runs it, returning the chosen path, `ErrCanceled`, or `ErrNoChooser`. It's a separate GUI window, so it blocks — run it off the UI goroutine (`utils.PickFile` does). Linux desktop dialogs only.
+- `Pick()` resolves the first installed native file-chooser dialog (`zenity`, then `kdialog`) and runs it, returning the chosen path, `ErrCanceled`, or `ErrNoChooser`. It's a separate GUI window, so it blocks — run it off the UI goroutine (`dialog.FilePicker.Open` does). Linux desktop dialogs only.
 - `Copy(src, dst, perm)` is a generic file copy that forces `dst`'s mode to `perm` (so re-copies stay private).
 
 ### `internal/vpn` — process management
@@ -77,7 +79,7 @@ bordered box; the root only places panels and routes messages.
 
 - Layout: bordered sidebar (`model.Sidebar`) + bordered output pane (`model.Terminal`), plus a status line and help footer. `layout()` reserves 2 rows (status + help) and accounts for each pane's border+padding when sizing.
 - See `internal/ui/CLAUDE.md` for the UI-tree architecture guide (UI as the sole model, the imperative-panel convention, the constants/style rules).
-- **Modes**: the root model (the `UI` struct in `ui.go`, the sole bubbletea model) has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`/`modeForget`/`modeDisconnect`). An open modal owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` first tries `vpn.LoadCreds` — saved creds skip the prompt and connect straight away; otherwise the credential modal (`model.AuthModal`) opens. Inside it, `enter` hands creds to `Connect` and clears them (and, if the save toggle is on — `ctrl+s` — calls `vpn.SaveCreds` best-effort first), `esc` cancels. `modeForget`: in normal mode `x` on a connection with saved creds opens a confirm popup (`forgetView`, no sub-model — rendered inline); `y`/`enter` calls `vpn.ForgetCreds`, `n`/`esc` backs out. With nothing stored `x` is a no-op (no popup). `modeDisconnect`: in normal mode `d` on a live connection (`logCh != nil`) opens a confirm popup (`disconnectView`, no sub-model — rendered inline like `forgetView`); `y`/`enter` tears the tunnel down, `n`/`esc` backs out, and with nothing connected `d` is a no-op (no popup). `modeAdd`: `a` opens the import modal (`model.AddModal`), which immediately launches the native file chooser (`utils.PickFile`); when `FilePickedMsg` arrives the modal shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Modals float over the live view via `common.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
+- **Modes**: the root model (the `UI` struct in `ui.go`, the sole bubbletea model) has an `appMode` (`modeNormal`/`modeAuth`/`modeAdd`/`modeConfirm`). An open overlay owns all input except the global log stream. `modeAuth`: `enter` on a connection that `NeedsAuth` first tries `vpn.LoadCreds` — saved creds skip the prompt and connect straight away; otherwise the credential modal (`model.AuthModal`) opens. Inside it, `enter` hands creds to `Connect` and clears them (and, if the save toggle is on — `ctrl+s` — calls `vpn.SaveCreds` best-effort first), `esc` cancels. `modeConfirm`: a reusable `dialog.Confirm` (title + message + an `onYes` closure) backs every yes/no popup. In normal mode `x` on a connection with saved creds confirms forgetting them (`onYes` = `vpn.ForgetCreds`); `d` on a live connection (`logCh != nil`) confirms tearing the tunnel down (`onYes` = `m.disconnect`). `y`/`enter` runs the action, `n`/`esc` backs out; with nothing stored/connected the key is a no-op (no popup). `modeAdd`: `a` opens the import flow (`add.go`), which launches the native file chooser via `dialog.FilePicker.Open`; when a `dialog.FilePickedMsg` arrives the picker shows the path, `enter` runs `vpn.ImportConfig` + `sidebar.AddConfig`, `r` re-picks, `esc` cancels. Overlays float over the live view via `common.Center` (lipgloss v2 `Canvas`/`Layer` compositing).
 - **Charm v2 stack**: bubbletea, bubbles, and lipgloss are all **v2** (`charm.land/...`). v2 gotchas: `Model.View()` returns a `tea.View` (not a string) — wrap content with the `altView` helper, which also sets `v.AltScreen = true` (alt screen is declarative per-frame in v2, not a `NewProgram` option); key presses arrive as `tea.KeyPressMsg` (`tea.KeyMsg` is now an interface), matched via `.String()`. Compositing for the popup uses lipgloss v2 `Canvas`/`Layer` behind `common.Overlay`/`Center`.
 - **Log streaming**: `utils.WaitForLog(ch)` is a `tea.Cmd` that blocks on the channel and emits `utils.LogMsg`/`utils.LogClosedMsg`; each handler re-issues it to pump the next line.
 - **Per-connection output**: `Terminal.buffers` keeps each connection's log. The active connection keeps filling its buffer even when another is selected; navigating the list (`Terminal.ShowBuffer`) swaps which buffer the viewport shows.

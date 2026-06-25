@@ -68,7 +68,7 @@ type UI struct {
 	sidebar  Sidebar
 	terminal Terminal
 	auth     AuthModal
-	add      AddModal
+	picker   dialog.FilePicker
 	mode     appMode
 	pending  vpn.Config     // connection awaiting credentials
 	confirm  dialog.Confirm // the active yes/no popup (forget creds, disconnect)
@@ -84,7 +84,7 @@ func New(configs []vpn.Config, mgr *vpn.Manager) *UI {
 	m.sidebar = NewSidebar(configs, &m.sh) // sidebar reads m.sh.connected by pointer
 	m.terminal = NewTerminal()
 	m.auth = NewAuthModal()
-	m.add = NewAddModal()
+	m.picker = dialog.NewFilePicker("add connection")
 	return m
 }
 
@@ -131,7 +131,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "a":
 			m.mode = modeAdd
-			return m, m.add.Open()
+			return m, m.picker.Open()
 		case "enter":
 			return m.enter()
 		case "d":
@@ -203,24 +203,6 @@ func (m *UI) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// updateAdd handles input while the import-connection modal is open.
-func (m *UI) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyPressMsg); ok {
-		switch key.String() {
-		case "esc":
-			m.add.Reset()
-			m.mode = modeNormal
-			return m, nil
-		case "r":
-			return m, m.add.Open() // launch the chooser again
-		case "enter":
-			return m.addConfirm()
-		}
-	}
-	m.add.Handle(msg) // records the file-chooser result
-	return m, nil
-}
-
 // updateConfirm handles any yes/no confirm popup (forget creds, disconnect).
 // y/enter runs the action the popup was built with; n/esc backs out.
 func (m *UI) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -245,24 +227,6 @@ func (m *UI) disconnect() {
 	m.terminal.MarkDisconnected()
 	m.logCh = nil
 	m.syncConnected()
-}
-
-// addConfirm imports the picked file into the connections dir and appends it to
-// the sidebar. Stays open on error so the user can pick again.
-func (m *UI) addConfirm() (tea.Model, tea.Cmd) {
-	path := m.add.Path()
-	if path == "" {
-		return m, nil // nothing picked yet
-	}
-	cfg, err := vpn.ImportConfig(path)
-	if err != nil {
-		m.add.SetError(err.Error())
-		return m, nil
-	}
-	m.sidebar.AddConfig(cfg)
-	m.add.Reset()
-	m.mode = modeNormal
-	return m, nil
 }
 
 // enter connects the selected config, prompting for credentials first if needed.
@@ -347,7 +311,7 @@ func (m *UI) View() tea.View {
 	case modeAuth:
 		body = common.Center(body, m.auth.View())
 	case modeAdd:
-		body = common.Center(body, m.add.View())
+		body = common.Center(body, m.picker.View())
 	case modeConfirm:
 		body = common.Center(body, m.confirm.View())
 	}

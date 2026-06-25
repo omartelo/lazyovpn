@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/zalando/go-keyring"
 
+	"github.com/omartelo/lazyovpn/internal/ui/dialog"
 	"github.com/omartelo/lazyovpn/internal/ui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
@@ -118,7 +119,7 @@ func TestAddConfirmImports(t *testing.T) {
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}) // open modal
 	m = out.(*UI)
-	out, _ = m.Update(utils.FilePickedMsg{Path: src}) // chooser result
+	out, _ = m.Update(dialog.FilePickedMsg{Path: src}) // chooser result
 	m = out.(*UI)
 	out, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // import + add
 	m = out.(*UI)

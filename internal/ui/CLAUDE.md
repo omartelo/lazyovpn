@@ -11,12 +11,14 @@ the pattern.
 
 - `common/` — **stateless** view primitives (`Popup`, `TitledBox`,
   `Overlay`/`Center`, the theme). Import these; add new primitives here.
-- `dialog/` — **stateful** overlay components (`Confirm`). Built on
-  `common.Popup`; the UI builds, drives, and centers them.
-- `utils/` — bubbletea glue: the file-chooser command and the log-stream pump
-  (`PickFile`, `WaitForLog`, the `LogMsg`/`LogClosedMsg` messages).
+- `dialog/` — **stateful** overlay components (`Confirm`, `FilePicker`). Built
+  on `common.Popup`; the UI builds, drives, and centers them.
+- `utils/` — bubbletea glue: the log-stream pump (`WaitForLog`, the
+  `LogMsg`/`LogClosedMsg` messages). The file chooser now lives in
+  `dialog.FilePicker`.
 - `model/` — the brain: `UI` (the sole bubbletea model) plus the panels it
-  drives (`Sidebar`, `Terminal`, `AuthModal`, `AddModal`).
+  drives (`Sidebar`, `Terminal`, `AuthModal`); the import flow (`add.go`) drives
+  a `dialog.FilePicker`.
 
 Import direction is one-way and cycle-free: `common` depends on nothing in the
 UI tree; `dialog` and `utils` build on `common`; `model` imports all three.
@@ -44,8 +46,8 @@ helpers `UI` owns and calls directly.
 ## Rules (from crush's AGENTS.md, they hold here)
 
 - Never do IO or expensive work in `Update` — always a `tea.Cmd`
-  (`utils.PickFile`, `utils.WaitForLog`). Never mutate state inside a command;
-  mutate in `Update` in response to the message the command emits.
+  (`dialog.FilePicker.Open`, `utils.WaitForLog`). Never mutate state inside a
+  command; mutate in `Update` in response to the message the command emits.
 - Don't nest models / don't add a new mini-Elm sub-model. Add a file, add an
   imperative helper.
 - Keep things simple; don't overcomplicate.
@@ -57,10 +59,11 @@ helpers `UI` owns and calls directly.
 | `Terminal`   | `model/terminal.go`  | Imperative ✓ — targeted methods, no `Handle`   |
 | `Sidebar`    | `model/sidebar.go`   | Imperative ✓ — hand-rolled (no bubbles list/delegate); `UI.Update` drives the cursor via `Move`, reads `shared.connected` by pointer |
 | `AuthModal`  | `model/authmodal.go` | Imperative ✓ — `Handle(msg)` routes to the focused field |
-| `AddModal`   | `model/addmodal.go`  | Imperative ✓ — `Handle(msg)` records the pick  |
 
-No panel has an Elm `Update(tea.Msg) (T, tea.Cmd)`. A panel that must forward a
-raw message to a wrapped bubble (`AuthModal` → its textinputs) exposes a
+(The import picker is not a panel: it is `dialog.FilePicker`, driven by the
+`add.go` flow.) No panel has an Elm `Update(tea.Msg) (T, tea.Cmd)`. A panel that
+must forward a raw message to a wrapped bubble (`AuthModal` → its textinputs)
+exposes a
 pointer-receiver `Handle(msg tea.Msg) tea.Cmd` that mutates in place; `UI.Update`
 calls it and does not reassign. Never add a sub-model that returns a new copy of
 itself.
