@@ -50,16 +50,18 @@ helpers `UI` owns and calls directly.
 
 ## Panels
 
-| Panel        | File                 | Shape                                  |
-| ------------ | -------------------- | -------------------------------------- |
-| `Terminal`   | `model/terminal.go`  | Imperative ✓ (the model to copy)       |
-| `Sidebar`    | `model/sidebar.go`   | Imperative + a legacy `Update` forwarder to the embedded `list` — **migration target** |
-| `AuthModal`  | `model/authmodal.go` | Imperative + a legacy `Update` — **migration target** |
-| `AddModal`   | `model/addmodal.go`  | Imperative + a legacy `Update` — **migration target** |
+| Panel        | File                 | Shape                                          |
+| ------------ | -------------------- | ---------------------------------------------- |
+| `Terminal`   | `model/terminal.go`  | Imperative ✓ — targeted methods, no `Handle`   |
+| `Sidebar`    | `model/sidebar.go`   | Imperative ✓ — `Handle(msg)` forwards to the embedded `list` |
+| `AuthModal`  | `model/authmodal.go` | Imperative ✓ — `Handle(msg)` routes to the focused field |
+| `AddModal`   | `model/addmodal.go`  | Imperative ✓ — `Handle(msg)` records the pick  |
 
-**Migration target:** strip the `Update(tea.Msg) (T, tea.Cmd)` Elm signature
-from `Sidebar`/`AuthModal`/`AddModal` and have `UI.Update` call targeted
-imperative methods instead (the crush way: components have no `Update`).
+No panel has an Elm `Update(tea.Msg) (T, tea.Cmd)`. The ones that need to
+forward a raw message to a wrapped bubble (`Sidebar`, `AuthModal`) expose a
+pointer-receiver `Handle(msg tea.Msg) tea.Cmd` that mutates in place and returns
+any command; `UI.Update` calls it and does not reassign. Keep this — never add a
+sub-model that returns a new copy of itself.
 
 ## Conventions
 

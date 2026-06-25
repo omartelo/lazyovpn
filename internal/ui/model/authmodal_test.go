@@ -8,7 +8,7 @@ import (
 )
 
 func typeRunes(a AuthModal, s string) AuthModal {
-	a, _ = a.Update(tea.KeyPressMsg{Text: s})
+	a.Handle(tea.KeyPressMsg{Text: s})
 	return a
 }
 
@@ -16,8 +16,8 @@ func TestAuthModalTypingAcrossFields(t *testing.T) {
 	a := NewAuthModal()
 	a.Open("vpn1")
 
-	a = typeRunes(a, "bob")                            // username is focused first
-	a, _ = a.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // move to password
+	a = typeRunes(a, "bob")                     // username is focused first
+	a.Handle(tea.KeyPressMsg{Code: tea.KeyTab}) // move to password
 	a = typeRunes(a, "hunter2")
 
 	if a.Username() != "bob" {
@@ -32,7 +32,7 @@ func TestAuthModalResetClears(t *testing.T) {
 	a := NewAuthModal()
 	a.Open("vpn1")
 	a = typeRunes(a, "bob")
-	a, _ = a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	a.Handle(tea.KeyPressMsg{Code: tea.KeyTab})
 	a = typeRunes(a, "hunter2")
 
 	a.Reset()
@@ -44,7 +44,7 @@ func TestAuthModalResetClears(t *testing.T) {
 func TestAuthModalPasswordMasked(t *testing.T) {
 	a := NewAuthModal()
 	a.Open("vpn1")
-	a, _ = a.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // focus password
+	a.Handle(tea.KeyPressMsg{Code: tea.KeyTab}) // focus password
 	a = typeRunes(a, "secret")
 
 	view := a.View()

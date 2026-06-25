@@ -161,8 +161,7 @@ func (m UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Navigation (j/k/arrows come from the list). On selection change, show that
 	// connection's output.
 	prev := m.sidebar.SelectedName()
-	var cmd tea.Cmd
-	m.sidebar, cmd = m.sidebar.Update(msg)
+	cmd := m.sidebar.Handle(msg)
 	if sel := m.sidebar.SelectedName(); sel != prev {
 		m.terminal.ShowBuffer(sel)
 	}
@@ -190,8 +189,7 @@ func (m UI) updateAuth(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.connect(cfg, user, pass)
 		}
 	}
-	var cmd tea.Cmd
-	m.auth, cmd = m.auth.Update(msg)
+	cmd := m.auth.Handle(msg)
 	return m, cmd
 }
 
@@ -209,9 +207,8 @@ func (m UI) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.addConfirm()
 		}
 	}
-	var cmd tea.Cmd
-	m.add, cmd = m.add.Update(msg) // records the file-chooser result
-	return m, cmd
+	m.add.Handle(msg) // records the file-chooser result
+	return m, nil
 }
 
 // updateForget handles the confirm-forget popup. y/enter deletes the saved

@@ -106,11 +106,13 @@ func (s *Sidebar) SetSize(w, h int) {
 	s.list.SetSize(w, h)
 }
 
-// Update forwards messages to the embedded list (navigation, filtering).
-func (s Sidebar) Update(msg tea.Msg) (Sidebar, tea.Cmd) {
+// Handle forwards a message to the embedded list (navigation, filtering) and
+// returns any command it emits. Imperative: it mutates the sidebar in place, so
+// the caller does not reassign — see internal/ui/CLAUDE.md.
+func (s *Sidebar) Handle(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	s.list, cmd = s.list.Update(msg)
-	return s, cmd
+	return cmd
 }
 
 // View renders the bordered panel.

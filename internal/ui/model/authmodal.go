@@ -63,16 +63,18 @@ func (a *AuthModal) Reset() {
 	a.save = false
 }
 
-// Update routes keys to the focused field and toggles focus on tab/arrows.
-func (a AuthModal) Update(msg tea.Msg) (AuthModal, tea.Cmd) {
+// Handle routes keys to the focused field and toggles focus on tab/arrows.
+// Imperative: it mutates the modal in place and returns any command the focused
+// field emits — see internal/ui/CLAUDE.md.
+func (a *AuthModal) Handle(msg tea.Msg) tea.Cmd {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "tab", "shift+tab", "up", "down":
 			a.toggleFocus()
-			return a, a.focusCmd()
+			return a.focusCmd()
 		case "ctrl+s":
 			a.save = !a.save
-			return a, nil
+			return nil
 		}
 	}
 	var cmd tea.Cmd
@@ -81,7 +83,7 @@ func (a AuthModal) Update(msg tea.Msg) (AuthModal, tea.Cmd) {
 	} else {
 		a.password, cmd = a.password.Update(msg)
 	}
-	return a, cmd
+	return cmd
 }
 
 func (a *AuthModal) toggleFocus() { a.focus = (a.focus + 1) % 2 }

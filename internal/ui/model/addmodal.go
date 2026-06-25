@@ -35,8 +35,9 @@ func (a *AddModal) SetError(msg string) { a.errMsg = msg }
 // Path returns the chosen file path, or "" if nothing is picked yet.
 func (a AddModal) Path() string { return a.path }
 
-// Update records the file-chooser result.
-func (a AddModal) Update(msg tea.Msg) (AddModal, tea.Cmd) {
+// Handle records the file-chooser result. Imperative: it mutates the modal in
+// place — see internal/ui/CLAUDE.md.
+func (a *AddModal) Handle(msg tea.Msg) {
 	if picked, ok := msg.(utils.FilePickedMsg); ok {
 		switch {
 		case picked.Err != nil:
@@ -47,7 +48,6 @@ func (a AddModal) Update(msg tea.Msg) (AddModal, tea.Cmd) {
 			a.path, a.errMsg = picked.Path, ""
 		}
 	}
-	return a, nil
 }
 
 // View renders the modal box. The root composites it over the main view.

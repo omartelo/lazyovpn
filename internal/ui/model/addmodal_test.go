@@ -10,7 +10,7 @@ import (
 
 func TestAddModalStoresPath(t *testing.T) {
 	a := NewAddModal()
-	a, _ = a.Update(utils.FilePickedMsg{Path: "/tmp/x.ovpn"})
+	a.Handle(utils.FilePickedMsg{Path: "/tmp/x.ovpn"})
 	if a.Path() != "/tmp/x.ovpn" {
 		t.Errorf("Path() = %q, want /tmp/x.ovpn", a.Path())
 	}
@@ -18,7 +18,7 @@ func TestAddModalStoresPath(t *testing.T) {
 
 func TestAddModalCanceledKeepsEmpty(t *testing.T) {
 	a := NewAddModal()
-	a, _ = a.Update(utils.FilePickedMsg{Canceled: true})
+	a.Handle(utils.FilePickedMsg{Canceled: true})
 	if a.Path() != "" {
 		t.Errorf("Path() = %q after cancel, want empty", a.Path())
 	}
@@ -26,7 +26,7 @@ func TestAddModalCanceledKeepsEmpty(t *testing.T) {
 
 func TestAddModalShowsError(t *testing.T) {
 	a := NewAddModal()
-	a, _ = a.Update(utils.FilePickedMsg{Err: errors.New("boom")})
+	a.Handle(utils.FilePickedMsg{Err: errors.New("boom")})
 	if !strings.Contains(a.View(), "boom") {
 		t.Error("View() should show the error message")
 	}
@@ -34,7 +34,7 @@ func TestAddModalShowsError(t *testing.T) {
 
 func TestAddModalResetClears(t *testing.T) {
 	a := NewAddModal()
-	a, _ = a.Update(utils.FilePickedMsg{Path: "/tmp/x.ovpn"})
+	a.Handle(utils.FilePickedMsg{Path: "/tmp/x.ovpn"})
 	a.Reset()
 	if a.Path() != "" {
 		t.Errorf("Path() = %q after Reset, want empty", a.Path())
