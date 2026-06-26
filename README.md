@@ -7,7 +7,7 @@ A terminal UI for managing OpenVPN connections, written in Go.
 [![License](https://img.shields.io/github/license/omartelo/lazyovpn)](LICENSE)
 
 <p align="center">
-  <img src="docs/lazyovpn.png" alt="lazyovpn" width="820">
+  <img src="docs/lazyovpn.gif" alt="lazyovpn" width="820">
 </p>
 
 ## Features
@@ -16,9 +16,9 @@ A terminal UI for managing OpenVPN connections, written in Go.
 - Connect / disconnect — `openvpn` runs as root via `pkexec`; the TUI itself stays unprivileged.
 - Live per-connection log streaming with a connection-state badge (connecting / connected / disconnected / error).
 - The connected entry is marked in the sidebar.
-- Prompts for credentials on `auth-user-pass` configs — the password is masked and never written to disk.
+- Prompts for credentials on `auth-user-pass` configs — the password is masked and never written to plaintext storage. Optionally save it to the OS keyring (Secret Service / libsecret) so later connects skip the prompt.
 - Import a config through the native file chooser (`zenity` / `kdialog`); it's copied into `~/.config/lazyovpn/connections`.
-- Filter and navigate the connection list.
+- Scrollable log pane: focus it with `tab` (or the mouse wheel) and page back through history.
 
 ## Quick Start
 
@@ -58,13 +58,17 @@ It discovers your OpenVPN configs on startup and opens the connection list. Pick
 
 | Key | Action |
 |-----|--------|
-| `↑`/`↓`, `j`/`k` | navigate |
-| `/` | filter |
+| `↑`/`↓`, `j`/`k` | navigate (sidebar) / scroll (log pane) |
 | `enter` | connect |
 | `a` | add a connection |
 | `d` | disconnect |
+| `x` | forget saved credentials |
+| `tab` | focus the log pane to scroll (`tab`/`esc` to go back) |
+| `pgup`/`pgdn` | page the log (while focused) |
 | `q` | quit |
+
+When prompted for credentials, `ctrl+s` toggles saving them to the OS keyring.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)
