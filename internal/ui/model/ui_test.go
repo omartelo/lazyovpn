@@ -329,6 +329,30 @@ func TestLogFocusScrollLeavesSidebar(t *testing.T) {
 	}
 }
 
+// The mouse wheel scrolls the log viewport even without key focus on it.
+func TestMouseWheelScrollsLog(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	m = sized.(*UI)
+	m.log.StartConnection("alpha")
+	for i := 0; i < 80; i++ {
+		m.log.AppendLog("line")
+	}
+	if !m.log.vp.AtBottom() {
+		t.Fatal("expected to start tailing at the bottom")
+	}
+
+	// Focus stays on the sidebar — the wheel must still reach the log.
+	out, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	mm := out.(*UI)
+	if mm.focus != focusSidebar {
+		t.Errorf("focus = %v, wheel must not change focus", mm.focus)
+	}
+	if mm.log.vp.AtBottom() {
+		t.Error("mouse wheel up did not scroll the log off the bottom")
+	}
+}
+
 // The help footer swaps to scroll hints while the log pane is focused.
 func TestHelpFooterFollowsFocus(t *testing.T) {
 	m := &UI{}

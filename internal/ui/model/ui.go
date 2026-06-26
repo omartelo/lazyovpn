@@ -127,6 +127,12 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncConnected()
 		}
 		return m, nil
+
+	case tea.MouseWheelMsg:
+		// The wheel scrolls the log viewport regardless of which pane has key
+		// focus — the sidebar doesn't scroll, the log is the only target.
+		// Scrolling off the bottom pauses tailing, same as keyboard scroll.
+		return m, m.log.Scroll(msg)
 	}
 
 	// An open modal owns all other input while it is up.
@@ -379,6 +385,7 @@ func (m *UI) helpFooter() string {
 func altView(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion // enable mouse wheel for log scrolling
 	return v
 }
 
