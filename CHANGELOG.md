@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The log panel is now scrollable. Press `tab` to focus the log pane, then
+  scroll with `↑`/`↓`/`j`/`k` (line) or `pgup`/`pgdn` (page); `tab` or `esc`
+  returns to the connection list. The mouse wheel scrolls the log too (no need
+  to focus it first). New lines keep tailing the bottom only while you are
+  already at the bottom — scrolling up to read history no longer yanks the view
+  down. The panel is also renamed from "terminal" to "log".
+
 ### Changed
 
 - Disconnecting (`d`) now asks for confirmation before tearing down a live

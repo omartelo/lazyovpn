@@ -54,7 +54,7 @@ func TestStaleLogIgnored(t *testing.T) {
 	if cmd != nil {
 		t.Error("stale LogMsg produced a command, want nil")
 	}
-	if out.(*UI).terminal.State().Badge() == "" {
+	if out.(*UI).log.State().Badge() == "" {
 		t.Error("UI corrupted by stale log")
 	}
 }
@@ -202,7 +202,7 @@ func TestDisconnectConfirmTearsDown(t *testing.T) {
 	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
-	m.terminal.StartConnection("alpha")
+	m.log.StartConnection("alpha")
 	m.logCh = make(chan string) // simulate a live stream without spawning openvpn
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
@@ -219,8 +219,8 @@ func TestDisconnectConfirmTearsDown(t *testing.T) {
 	if done.logCh != nil {
 		t.Error("logCh still set after confirming disconnect, want nil")
 	}
-	if done.terminal.State() != StateDisconnected {
-		t.Errorf("state = %v after disconnect, want disconnected", done.terminal.State())
+	if done.log.State() != StateDisconnected {
+		t.Errorf("state = %v after disconnect, want disconnected", done.log.State())
 	}
 }
 
@@ -229,7 +229,7 @@ func TestDisconnectCancelKeepsConnection(t *testing.T) {
 	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
-	m.terminal.StartConnection("alpha")
+	m.log.StartConnection("alpha")
 	m.logCh = make(chan string)
 
 	out, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})    // open confirm
@@ -255,6 +255,116 @@ func TestDisconnectNoConnectionNoPopup(t *testing.T) {
 	}
 }
 
+// Enter on the already-connected connection is a no-op: it must not reconnect
+// (no command, the live channel and state are untouched). The config path does
+// not exist, so without the guard enter would fall through to NeedsAuth and
+// error out — which the StateConnecting assertion catches.
+func TestEnterWhileConnectedIsNoOp(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection("alpha") // -> StateConnecting, active = alpha
+	ch := make(chan string)
+	m.logCh = ch
+
+	out, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	mm := out.(*UI)
+	if cmd != nil {
+		t.Error("enter while already connected issued a command, want no-op")
+	}
+	if mm.logCh != ch {
+		t.Error("enter while connected replaced the live channel (reconnected)")
+	}
+	if mm.log.State() != StateConnecting {
+		t.Errorf("state = %v after enter, want unchanged StateConnecting (no reconnect)", mm.log.State())
+	}
+}
+
+// Tab moves focus to the log pane (to scroll the log); tab/esc return it to
+// the sidebar. Focus is orthogonal to connection state — no live stream needed.
+func TestTabTogglesLogFocus(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	mm := out.(*UI)
+	if mm.focus != focusLog {
+		t.Fatalf("focus = %v after tab, want focusLog", mm.focus)
+	}
+	if mm.mode != modeNormal {
+		t.Errorf("mode = %v, want modeNormal (pane focus is not an overlay)", mm.mode)
+	}
+
+	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if got := out.(*UI).focus; got != focusSidebar {
+		t.Errorf("focus = %v after esc, want focusSidebar", got)
+	}
+
+	out, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // focus again
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := out.(*UI).focus; got != focusSidebar {
+		t.Errorf("focus = %v after tab toggle back, want focusSidebar", got)
+	}
+}
+
+// While the log is focused, navigation keys scroll the log and must NOT
+// move the sidebar cursor.
+func TestLogFocusScrollLeavesSidebar(t *testing.T) {
+	m := New([]vpn.Config{
+		{Name: "alpha", Path: "/x/alpha.ovpn"},
+		{Name: "beta", Path: "/x/beta.ovpn"},
+	}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // focus log
+	m = out.(*UI)
+	before := m.sidebar.SelectedName()
+
+	out, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // would move the cursor if unfocused
+	m = out.(*UI)
+	if got := m.sidebar.SelectedName(); got != before {
+		t.Errorf("sidebar moved to %q while log focused, want %q", got, before)
+	}
+}
+
+// The mouse wheel scrolls the log viewport even without key focus on it.
+func TestMouseWheelScrollsLog(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	m = sized.(*UI)
+	m.log.StartConnection("alpha")
+	for i := 0; i < 80; i++ {
+		m.log.AppendLog("line")
+	}
+	if !m.log.vp.AtBottom() {
+		t.Fatal("expected to start tailing at the bottom")
+	}
+
+	// Focus stays on the sidebar — the wheel must still reach the log.
+	out, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	mm := out.(*UI)
+	if mm.focus != focusSidebar {
+		t.Errorf("focus = %v, wheel must not change focus", mm.focus)
+	}
+	if mm.log.vp.AtBottom() {
+		t.Error("mouse wheel up did not scroll the log off the bottom")
+	}
+}
+
+// The help footer swaps to scroll hints while the log pane is focused.
+func TestHelpFooterFollowsFocus(t *testing.T) {
+	m := &UI{}
+	if got := m.helpFooter(); got != helpKeys {
+		t.Errorf("sidebar-focus footer = %q, want the normal bindings", got)
+	}
+	m.focus = focusLog
+	if got := m.helpFooter(); got != helpKeysLog {
+		t.Errorf("log-focus footer = %q, want the scroll bindings", got)
+	}
+}
+
 // statusLine surfaces the error message when in error state, otherwise the
 // active connection name.
 func TestStatusLine(t *testing.T) {
@@ -262,12 +372,12 @@ func TestStatusLine(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	m.terminal.SetError("boom")
+	m.log.SetError("boom")
 	if got := m.statusLine(); !strings.Contains(got, "boom") {
 		t.Errorf("statusLine = %q, want it to contain the error", got)
 	}
 
-	m.terminal.StartConnection("alpha")
+	m.log.StartConnection("alpha")
 	if got := m.statusLine(); !strings.Contains(got, "alpha") {
 		t.Errorf("statusLine = %q, want it to contain the active name", got)
 	}

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/omartelo/lazyovpn/internal/ui/common"
@@ -39,8 +40,8 @@ func (s ConnState) Badge() string {
 	return lipgloss.NewStyle().Foreground(color).Bold(true).Render("● " + label)
 }
 
-// Terminal is the output panel: per-connection log buffers, a viewport, and connection state.
-type Terminal struct {
+// Log is the output panel: per-connection log buffers, a viewport, and connection state.
+type Log struct {
 	vp         viewport.Model
 	buffers    map[string]*strings.Builder // accumulated output per connection
 	activeName string                      // connection feeding the live stream
@@ -51,9 +52,9 @@ type Terminal struct {
 	ready      bool
 }
 
-// NewTerminal builds an empty output panel.
-func NewTerminal() Terminal {
-	return Terminal{
+// NewLog builds an empty log panel.
+func NewLog() Log {
+	return Log{
 		buffers: map[string]*strings.Builder{},
 		state:   StateIdle,
 	}
@@ -61,95 +62,109 @@ func NewTerminal() Terminal {
 
 // SetSize sets the inner content size (inside the border), creating the viewport
 // on first call.
-func (t *Terminal) SetSize(w, h int) {
-	t.w, t.h = w, h
-	if !t.ready {
-		t.vp = viewport.New() // v2: size via setters, not constructor args
-		t.ready = true
+func (l *Log) SetSize(w, h int) {
+	l.w, l.h = w, h
+	if !l.ready {
+		l.vp = viewport.New() // v2: size via setters, not constructor args
+		l.ready = true
 	}
-	t.vp.SetWidth(w)
-	t.vp.SetHeight(h)
+	l.vp.SetWidth(w)
+	l.vp.SetHeight(h)
 }
 
 // Ready reports whether the viewport has been sized at least once.
-func (t Terminal) Ready() bool { return t.ready }
+func (l Log) Ready() bool { return l.ready }
 
 // StartConnection resets the buffer for name and enters the connecting state.
-func (t *Terminal) StartConnection(name string) {
-	t.activeName = name
-	t.buffers[name] = &strings.Builder{} // reconnecting clears the old log
-	t.shownName = name
-	t.state = StateConnecting
-	t.errMsg = ""
-	t.vp.SetContent("")
-	t.vp.GotoTop()
+func (l *Log) StartConnection(name string) {
+	l.activeName = name
+	l.buffers[name] = &strings.Builder{} // reconnecting clears the old log
+	l.shownName = name
+	l.state = StateConnecting
+	l.errMsg = ""
+	l.vp.SetContent("")
+	l.vp.GotoTop()
 }
 
 // AppendLog records one line from the active stream and detects tunnel-up.
-func (t *Terminal) AppendLog(line string) {
+func (l *Log) AppendLog(line string) {
 	if strings.Contains(line, connectedMarker) {
-		t.state = StateConnected
+		l.state = StateConnected
 	}
-	b := t.buffers[t.activeName]
+	b := l.buffers[l.activeName]
 	if b == nil {
 		return
 	}
 	b.WriteString(line + "\n")
-	if t.shownName == t.activeName {
-		t.vp.SetContent(b.String())
-		t.vp.GotoBottom()
+	if l.shownName == l.activeName {
+		// Tail the live stream, but only while the user is already at the bottom.
+		// If they have scrolled up to read back, leave the viewport where it is.
+		follow := l.vp.AtBottom()
+		l.vp.SetContent(b.String())
+		if follow {
+			l.vp.GotoBottom()
+		}
 	}
+}
+
+// Scroll forwards a navigation message to the viewport (line/page scrolling via
+// its default keymap). The UI calls this while the log pane is focused so the
+// user can read back through the output.
+func (l *Log) Scroll(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	l.vp, cmd = l.vp.Update(msg)
+	return cmd
 }
 
 // MarkClosed records that the active stream ended (process exited).
-func (t *Terminal) MarkClosed() {
-	if b := t.buffers[t.activeName]; b != nil {
+func (l *Log) MarkClosed() {
+	if b := l.buffers[l.activeName]; b != nil {
 		b.WriteString("\n[process exited]\n")
 	}
-	if t.shownName == t.activeName {
-		t.ShowBuffer(t.activeName)
+	if l.shownName == l.activeName {
+		l.ShowBuffer(l.activeName)
 	}
-	t.activeName = ""
-	t.state = StateDisconnected
+	l.activeName = ""
+	l.state = StateDisconnected
 }
 
 // MarkDisconnected enters the disconnected state (user-initiated).
-func (t *Terminal) MarkDisconnected() {
-	t.activeName = ""
-	t.state = StateDisconnected
+func (l *Log) MarkDisconnected() {
+	l.activeName = ""
+	l.state = StateDisconnected
 }
 
 // SetError enters the error state with a message.
-func (t *Terminal) SetError(msg string) {
-	t.state = StateError
-	t.errMsg = msg
+func (l *Log) SetError(msg string) {
+	l.state = StateError
+	l.errMsg = msg
 }
 
 // ShowBuffer renders connection name's output into the viewport (placeholder if empty).
-func (t *Terminal) ShowBuffer(name string) {
-	t.shownName = name
-	if b, ok := t.buffers[name]; ok {
-		t.vp.SetContent(b.String())
+func (l *Log) ShowBuffer(name string) {
+	l.shownName = name
+	if b, ok := l.buffers[name]; ok {
+		l.vp.SetContent(b.String())
 	} else {
-		t.vp.SetContent("(no output — press enter to connect)")
+		l.vp.SetContent("(no output — press enter to connect)")
 	}
-	t.vp.GotoBottom()
+	l.vp.GotoBottom()
 }
 
 // View renders the bordered panel.
-func (t Terminal) View(focused bool) string {
-	title := "terminal"
-	if t.shownName != "" {
-		title = "terminal — " + t.shownName
+func (l Log) View(focused bool) string {
+	title := "log"
+	if l.shownName != "" {
+		title = "log — " + l.shownName
 	}
-	return common.TitledBox(title, t.vp.View(), t.w, t.h, focused)
+	return common.TitledBox(title, l.vp.View(), l.w, l.h, focused)
 }
 
 // State returns the current connection state.
-func (t Terminal) State() ConnState { return t.state }
+func (l Log) State() ConnState { return l.state }
 
 // ActiveName returns the connection feeding the live stream, or "".
-func (t Terminal) ActiveName() string { return t.activeName }
+func (l Log) ActiveName() string { return l.activeName }
 
 // Err returns the last error message.
-func (t Terminal) Err() string { return t.errMsg }
+func (l Log) Err() string { return l.errMsg }
