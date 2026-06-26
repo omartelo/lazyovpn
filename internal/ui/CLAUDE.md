@@ -18,7 +18,7 @@ the pattern.
   `LogMsg`/`LogClosedMsg` messages). The file chooser now lives in
   `dialog.FilePicker`.
 - `model/` — the brain: `UI` (the sole bubbletea model) plus the panels it
-  drives (`Sidebar`, `Terminal`). The overlays — credential prompt, confirm,
+  drives (`Sidebar`, `Log`). The overlays — credential prompt, confirm,
   file picker — are `dialog` components the UI drives (the import flow lives in
   `add.go`).
 
@@ -36,7 +36,7 @@ helpers `UI` owns and calls directly.
   `utils.LogClosedMsg`) so the live stream and layout flow regardless of mode;
   then the open-modal dispatch (`m.mode`); then normal-mode keys; then list
   navigation. A modal owns all input except the global log stream.
-- **Panels are imperative.** `Terminal` is the reference: no `Update(tea.Msg)`,
+- **Panels are imperative.** `Log` is the reference: no `Update(tea.Msg)`,
   just methods `UI` calls (`AppendLog`, `ShowBuffer`, `StartConnection`,
   `MarkClosed`, `State`, `View`). New panels follow this — expose methods (and
   return a `tea.Cmd` when a side effect is needed), render via `View(...)`, and
@@ -58,7 +58,7 @@ helpers `UI` owns and calls directly.
 
 | Panel        | File                 | Shape                                          |
 | ------------ | -------------------- | ---------------------------------------------- |
-| `Terminal`   | `model/terminal.go`  | Imperative ✓ — targeted methods, no `Handle`   |
+| `Log`        | `model/log.go`       | Imperative ✓ — targeted methods; `Scroll(msg)` forwards nav keys to the viewport when the pane is focused |
 | `Sidebar`    | `model/sidebar.go`   | Imperative ✓ — hand-rolled (no bubbles list/delegate); `UI.Update` drives the cursor via `Move`, reads `shared.connected` by pointer |
 
 (The credential prompt and import picker are not panels: they are
@@ -88,6 +88,14 @@ not its 23 KB machinery).
   `dialog.Confirm` (built with an `onYes` closure); stateful modals (`auth`,
   `add`) keep their own mode. A full `dialog.Overlay` stack (crush has one) is
   overkill while only one popup shows at a time — add it when popups must stack.
+- **Pane focus** is orthogonal to modes: a `pane` field (`focusSidebar`/
+  `focusLog`) picks which panel gets navigation keys in `modeNormal` (an
+  open overlay still wins). `tab` focuses the log pane so its viewport
+  scrolls (`Log.Scroll`); `tab`/`esc` return to the sidebar. Use a
+  dedicated key, not `enter` — `enter` is connect/reconnect and overloading it
+  was ambiguous (we can't reliably tell a live tunnel from a closed `logCh`,
+  e.g. a `daemon` config). Keep focus a plain field, not an `appMode` — it is
+  not an overlay and the global log stream keeps flowing under it.
 - **Stale-channel guard (invariant #4):** every `utils.LogMsg`/`LogClosedMsg`
   carries its source channel; drop it when `msg.Ch != m.logCh`. Keep this on any
   new log-channel message — it is what stops a connection switch from mixing old

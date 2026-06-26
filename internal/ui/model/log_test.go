@@ -1,18 +1,21 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
-func newSizedTerminal() Terminal {
-	t := NewTerminal()
+func newSizedLog() Log {
+	t := NewLog()
 	t.SetSize(40, 10)
 	return t
 }
 
-func TestTerminalInitialState(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogInitialState(t *testing.T) {
+	term := newSizedLog()
 	if term.State() != StateIdle {
 		t.Errorf("initial State() = %v, want StateIdle", term.State())
 	}
@@ -21,8 +24,8 @@ func TestTerminalInitialState(t *testing.T) {
 	}
 }
 
-func TestTerminalStartConnection(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogStartConnection(t *testing.T) {
+	term := newSizedLog()
 	term.StartConnection("alpha")
 
 	if term.State() != StateConnecting {
@@ -33,8 +36,8 @@ func TestTerminalStartConnection(t *testing.T) {
 	}
 }
 
-func TestTerminalConnectedDetection(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogConnectedDetection(t *testing.T) {
+	term := newSizedLog()
 	term.StartConnection("alpha")
 
 	term.AppendLog("Mon Jun 24 ... TLS handshake")
@@ -48,8 +51,8 @@ func TestTerminalConnectedDetection(t *testing.T) {
 	}
 }
 
-func TestTerminalBufferAccumulates(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogBufferAccumulates(t *testing.T) {
+	term := newSizedLog()
 	term.StartConnection("alpha")
 	term.AppendLog("line one")
 	term.AppendLog("line two")
@@ -60,8 +63,8 @@ func TestTerminalBufferAccumulates(t *testing.T) {
 	}
 }
 
-func TestTerminalStartConnectionClearsBuffer(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogStartConnectionClearsBuffer(t *testing.T) {
+	term := newSizedLog()
 	term.StartConnection("alpha")
 	term.AppendLog("stale line")
 	term.StartConnection("alpha") // reconnect
@@ -71,8 +74,8 @@ func TestTerminalStartConnectionClearsBuffer(t *testing.T) {
 	}
 }
 
-func TestTerminalMarkClosed(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogMarkClosed(t *testing.T) {
+	term := newSizedLog()
 	term.StartConnection("alpha")
 	term.AppendLog("running")
 	term.MarkClosed()
@@ -88,8 +91,8 @@ func TestTerminalMarkClosed(t *testing.T) {
 	}
 }
 
-func TestTerminalMarkDisconnected(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogMarkDisconnected(t *testing.T) {
+	term := newSizedLog()
 	term.StartConnection("alpha")
 	term.MarkDisconnected()
 
@@ -101,8 +104,8 @@ func TestTerminalMarkDisconnected(t *testing.T) {
 	}
 }
 
-func TestTerminalSetError(t *testing.T) {
-	term := newSizedTerminal()
+func TestLogSetError(t *testing.T) {
+	term := newSizedLog()
 	term.SetError("boom")
 	if term.State() != StateError {
 		t.Errorf("State() = %v, want StateError", term.State())
@@ -112,16 +115,54 @@ func TestTerminalSetError(t *testing.T) {
 	}
 }
 
-func TestTerminalStaleLogIgnoredWhenSwitched(t *testing.T) {
+func TestLogStaleLogIgnoredWhenSwitched(t *testing.T) {
 	// Showing another connection: active still buffers, but the viewport is not
 	// the active one — the active buffer keeps filling regardless.
-	term := newSizedTerminal()
+	term := newSizedLog()
 	term.StartConnection("alpha")
 	term.ShowBuffer("beta") // user navigated away
 	term.AppendLog("still arriving")
 
 	if got := term.buffers["alpha"].String(); !strings.Contains(got, "still arriving") {
 		t.Errorf("active buffer = %q, want the line even while showing another", got)
+	}
+}
+
+// While tailing (viewport at the bottom) new log lines keep the view pinned to
+// the bottom; once the user scrolls up, new lines must not yank it back down.
+func TestAppendLogTailFollowAndLock(t *testing.T) {
+	term := NewLog()
+	term.SetSize(40, 5) // content will exceed 5 rows
+	term.StartConnection("alpha")
+	for i := 0; i < 50; i++ {
+		term.AppendLog(fmt.Sprintf("line %d", i))
+	}
+	if !term.vp.AtBottom() {
+		t.Fatal("tailing should keep the viewport at the bottom")
+	}
+
+	term.vp.GotoTop() // user scrolls up to read history
+	term.AppendLog("a fresh line")
+	if term.vp.AtBottom() {
+		t.Error("new log yanked the viewport to the bottom while scrolled up")
+	}
+}
+
+// Scroll forwards a navigation key to the viewport: pgup moves off the bottom.
+func TestLogScroll(t *testing.T) {
+	term := NewLog()
+	term.SetSize(40, 5)
+	term.StartConnection("alpha")
+	for i := 0; i < 50; i++ {
+		term.AppendLog(fmt.Sprintf("line %d", i))
+	}
+	if !term.vp.AtBottom() {
+		t.Fatal("expected to start at the bottom")
+	}
+
+	term.Scroll(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if term.vp.AtBottom() {
+		t.Error("pgup via Scroll did not move the viewport off the bottom")
 	}
 }
 
