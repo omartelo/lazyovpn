@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/zalando/go-keyring"
@@ -362,6 +363,179 @@ func TestHelpFooterFollowsFocus(t *testing.T) {
 	m.focus = focusLog
 	if got := m.helpFooter(); got != helpKeysLog {
 		t.Errorf("log-focus footer = %q, want the scroll bindings", got)
+	}
+}
+
+// armedConnected builds a UI with a live, connected, auto-reconnect-armed
+// connection — without spawning openvpn. It returns the UI and its live channel
+// so a test can deliver a LogClosedMsg for that exact channel (a drop).
+func armedConnected(t *testing.T, name string) (*UI, chan string) {
+	t.Helper()
+	cfg := vpn.Config{Name: name, Path: "/x/" + name + ".ovpn"}
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection(name)
+	m.log.state = StateConnected // simulate tunnel-up without the marker stream
+	ch := make(chan string)
+	m.logCh = ch
+	m.reCfg = cfg
+	m.reArmed = true
+	return m, ch
+}
+
+// A live tunnel's process exiting on its own schedules an auto-reconnect:
+// the channel clears, the attempt counter advances, and a timer cmd is returned.
+func TestDropSchedulesReconnect(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: ch})
+	mm := out.(*UI)
+	if cmd == nil {
+		t.Error("drop while connected produced no reconnect timer")
+	}
+	if mm.logCh != nil {
+		t.Error("logCh not cleared after drop")
+	}
+	if mm.reAttempts != 1 {
+		t.Errorf("reAttempts = %d after first drop, want 1", mm.reAttempts)
+	}
+	if mm.log.State() != StateReconnecting {
+		t.Errorf("state = %v after drop, want StateReconnecting", mm.log.State())
+	}
+}
+
+// A close from a stale channel (invariant #4) must not trigger a reconnect.
+func TestForeignDropIgnored(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: make(chan string)})
+	mm := out.(*UI)
+	if cmd != nil {
+		t.Error("close from a foreign channel produced a command")
+	}
+	if mm.logCh != ch {
+		t.Error("foreign close cleared the live channel")
+	}
+}
+
+// A process that exits before the tunnel ever came up (bad config, auth failure)
+// must NOT be retried — that would spin pkexec on a hopeless connection.
+func TestDropBeforeConnectedGivesUp(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+	m.log.state = StateConnecting // never reached the connected marker
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: ch})
+	mm := out.(*UI)
+	if cmd != nil {
+		t.Error("reconnect scheduled for a connection that never came up")
+	}
+	if mm.log.State() != StateDisconnected {
+		t.Errorf("state = %v, want StateDisconnected", mm.log.State())
+	}
+	if mm.reArmed {
+		t.Error("reArmed still set after giving up")
+	}
+}
+
+// A daemon config forks out of our reach, so a drop must not be retried (it would
+// stack a second openvpn on the still-running daemon).
+func TestDropDaemonNotReconnected(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+	m.reArmed = false // daemon config: untrackable
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: ch})
+	if cmd != nil {
+		t.Error("daemon config was auto-reconnected")
+	}
+	if out.(*UI).log.State() != StateDisconnected {
+		t.Error("daemon drop did not settle to disconnected")
+	}
+}
+
+// Once the retry budget is spent, a further drop gives up instead of looping.
+func TestDropBudgetExhaustedGivesUp(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+	m.reAttempts = maxReconnects // budget already spent (recent, so no stable reset)
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: ch})
+	mm := out.(*UI)
+	if cmd != nil {
+		t.Error("reconnect scheduled past the retry cap")
+	}
+	if mm.log.State() != StateDisconnected {
+		t.Errorf("state = %v at the cap, want StateDisconnected", mm.log.State())
+	}
+}
+
+// A connection that stayed up past stableUptime is healthy: a later drop earns
+// the full retry budget back rather than counting against the spent one.
+func TestStableUptimeResetsBudget(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+	m.reAttempts = maxReconnects
+	m.connectedAt = time.Now().Add(-2 * stableUptime) // proven stable
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: ch})
+	mm := out.(*UI)
+	if cmd == nil {
+		t.Error("stable session did not earn its retry budget back")
+	}
+	if mm.reAttempts != 1 {
+		t.Errorf("reAttempts = %d after stable reset, want 1", mm.reAttempts)
+	}
+}
+
+// Pressing "d" while a reconnect is pending cancels it — no confirm popup (there
+// is no live tunnel to tear down), straight to disconnected.
+func TestDisconnectCancelsPendingReconnect(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+	out, _ := m.Update(utils.LogClosedMsg{Ch: ch}) // drop -> reconnecting
+	m = out.(*UI)
+	if m.log.State() != StateReconnecting {
+		t.Fatalf("setup: state = %v, want StateReconnecting", m.log.State())
+	}
+
+	out, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	mm := out.(*UI)
+	if mm.mode != modeNormal {
+		t.Errorf("mode = %v, want modeNormal (no confirm for a pending reconnect)", mm.mode)
+	}
+	if mm.log.State() != StateDisconnected {
+		t.Errorf("state = %v after cancel, want StateDisconnected", mm.log.State())
+	}
+	if mm.reArmed {
+		t.Error("reArmed still set after cancelling the reconnect")
+	}
+}
+
+// A reconnect timer that fires after the user has moved on (not reconnecting any
+// more) is stale and must not start a connection.
+func TestStaleReconnectMsgIgnored(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, cmd := m.Update(reconnectMsg{})
+	if cmd != nil {
+		t.Error("stale reconnectMsg produced a command")
+	}
+	if out.(*UI).logCh != nil {
+		t.Error("stale reconnectMsg started a connection")
+	}
+}
+
+// A user disconnect disarms auto-reconnect and wipes the in-memory credentials
+// (invariant #6: creds live no longer than the connection they belong to).
+func TestDisconnectDisarmsReconnect(t *testing.T) {
+	m, _ := armedConnected(t, "alpha")
+	m.reUser, m.rePass = "u", "p"
+
+	m.disconnect()
+	if m.reArmed {
+		t.Error("reArmed still set after a user disconnect")
+	}
+	if m.reUser != "" || m.rePass != "" {
+		t.Error("credentials not wiped after disconnect")
 	}
 }
 

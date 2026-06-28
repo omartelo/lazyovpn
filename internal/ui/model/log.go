@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -22,6 +23,7 @@ const (
 	StateConnected
 	StateDisconnected
 	StateError
+	StateReconnecting // tunnel dropped on its own; waiting to auto-redial
 )
 
 // Badge renders the colored status indicator for a state.
@@ -36,6 +38,8 @@ func (s ConnState) Badge() string {
 		label, color = "disconnected", common.Muted
 	case StateError:
 		label, color = "error", common.Danger
+	case StateReconnecting:
+		label, color = "reconnecting...", common.Warn
 	}
 	return lipgloss.NewStyle().Foreground(color).Bold(true).Render("● " + label)
 }
@@ -126,6 +130,19 @@ func (l *Log) MarkClosed() {
 	}
 	l.activeName = ""
 	l.state = StateDisconnected
+}
+
+// MarkReconnecting notes the live tunnel dropped and is being auto-redialed
+// (attempt n of maxReconnects). It keeps activeName — the same connection is
+// coming back — and the buffer/badge show the gap.
+func (l *Log) MarkReconnecting(n int) {
+	if b := l.buffers[l.activeName]; b != nil {
+		fmt.Fprintf(b, "\n[connection lost — reconnecting (%d/%d)]\n", n, maxReconnects)
+		if l.shownName == l.activeName {
+			l.ShowBuffer(l.activeName)
+		}
+	}
+	l.state = StateReconnecting
 }
 
 // MarkDisconnected enters the disconnected state (user-initiated).

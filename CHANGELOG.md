@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Auto-reconnect. When a live tunnel's `openvpn` process exits on its own
+  (a crash, an external kill, or a hard server drop that outlasts openvpn's own
+  retry loop), lazyovpn redials the same connection automatically — up to 5
+  times, 3s apart. A connection that stayed up at least 30s is treated as
+  healthy and earns the full retry budget back, so an occasional drop keeps
+  reconnecting while a tight flap gives up instead of spinning. The status badge
+  shows `reconnecting...`; press `d` to cancel a pending reconnect. Saved
+  (keyring) and no-auth connections come back seamlessly; a connection whose
+  password was typed once redials with the in-memory credentials for the life of
+  that connection (never written to storage). Configs that `daemon` into the
+  background are excluded — their foreground process exits by design and the
+  tunnel is untrackable.
+
 ## [0.3.0] - 2026-06-25
 
 ### Added

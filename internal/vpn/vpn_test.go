@@ -91,6 +91,38 @@ func TestNeedsAuthMissingFile(t *testing.T) {
 	}
 }
 
+func TestHasDaemon(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare directive", "client\ndaemon\ndev tun\n", true},
+		{"with progname", "client\ndaemon openvpn-client\n", true},
+		{"indented and padded", "client\n   daemon  \n", true},
+		{"no directive", "client\ndev tun\nremote vpn.example 1194\n", false},
+		{"commented out", "client\n# daemon\n; daemon\n", false},
+		{"substring is not a match", "client\ndaemonize\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := HasDaemon(writeConfig(t, tt.content))
+			if err != nil {
+				t.Fatalf("HasDaemon error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("HasDaemon = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasDaemonMissingFile(t *testing.T) {
+	if _, err := HasDaemon(Config{Path: "/nonexistent/x.ovpn"}); err == nil {
+		t.Error("HasDaemon on missing file: want error, got nil")
+	}
+}
+
 func TestDiscover(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
