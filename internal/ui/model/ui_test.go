@@ -612,3 +612,57 @@ func TestStatusLine(t *testing.T) {
 		t.Errorf("statusLine = %q, want it to contain the active name", got)
 	}
 }
+
+// armReconnect's decision is the whole "auto-reconnect is a keyring feature"
+// contract: armed only for a trackable (non-daemon) config that can be silently
+// redialed. The reconnect tests set reArmed by hand, so the decision itself
+// needs its own coverage.
+func TestArmReconnectDecision(t *testing.T) {
+	keyring.MockInit()
+	tests := []struct {
+		name    string
+		content string
+		saved   bool // pre-save creds in the keyring for this config
+		want    bool
+	}{
+		{"no-auth, trackable", "client\ndev tun\n", false, true},
+		{"daemon forks out of reach", "client\ndaemon\n", false, false},
+		{"needs auth, nothing saved", "client\nauth-user-pass\n", false, false},
+		{"needs auth, creds saved", "client\nauth-user-pass\n", true, true},
+		{"daemon wins even with saved creds", "client\ndaemon\nauth-user-pass\n", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := writeTempConfig(t, tt.name, tt.content)
+			if tt.saved {
+				if err := vpn.SaveCreds(cfg.Name, "u", "p"); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = vpn.ForgetCreds(cfg.Name) })
+			}
+
+			m := &UI{connectedAt: time.Now()} // non-zero clock to prove the reset
+			m.armReconnect(cfg)
+
+			if m.reArmed != tt.want {
+				t.Errorf("reArmed = %v, want %v", m.reArmed, tt.want)
+			}
+			if m.reCfg.Name != cfg.Name {
+				t.Errorf("reCfg = %q, want %q", m.reCfg.Name, cfg.Name)
+			}
+			if !m.connectedAt.IsZero() {
+				t.Error("connectedAt not reset — the stability clock must restart per attempt")
+			}
+		})
+	}
+}
+
+// A config whose file cannot be read is never armed (NeedsAuth errors → not
+// redialable), so a drop on it does not spin pkexec on a hopeless connection.
+func TestArmReconnectUnreadableConfig(t *testing.T) {
+	m := &UI{}
+	m.armReconnect(vpn.Config{Name: "ghost", Path: "/does/not/exist.ovpn"})
+	if m.reArmed {
+		t.Error("reArmed = true for an unreadable config, want false")
+	}
+}

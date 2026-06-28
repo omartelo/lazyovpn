@@ -175,13 +175,20 @@ func TestDiscover(t *testing.T) {
 }
 
 func TestWriteCredsFile(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	runtime := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtime)
 
 	path, err := writeCredsFile("alice", "s3cret")
 	if err != nil {
 		t.Fatalf("writeCredsFile error: %v", err)
 	}
 	defer os.Remove(path)
+
+	// The creds file must land on the RAM-backed XDG_RUNTIME_DIR, not on durable
+	// storage — that is the whole point of writing it there.
+	if dir := filepath.Dir(path); dir != runtime {
+		t.Errorf("creds file in %q, want it under XDG_RUNTIME_DIR %q", dir, runtime)
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -197,5 +204,21 @@ func TestWriteCredsFile(t *testing.T) {
 	}
 	if got, want := string(data), "alice\ns3cret\n"; got != want {
 		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// With no XDG_RUNTIME_DIR set, writeCredsFile falls back to the system temp dir
+// so a connection can still authenticate.
+func TestWriteCredsFileFallback(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	path, err := writeCredsFile("alice", "s3cret")
+	if err != nil {
+		t.Fatalf("writeCredsFile error: %v", err)
+	}
+	defer os.Remove(path)
+
+	if dir := filepath.Dir(path); dir != os.TempDir() {
+		t.Errorf("fallback creds file in %q, want system temp %q", dir, os.TempDir())
 	}
 }

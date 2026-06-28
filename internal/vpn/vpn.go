@@ -39,6 +39,10 @@ const logBufferLines = 100
 // credentials: owner read/write only.
 const privateFileMode os.FileMode = 0o600
 
+// execCommand builds the privileged openvpn command. A package var so tests can
+// swap pkexec/openvpn for a helper subprocess (see connect_test.go).
+var execCommand = exec.Command
+
 // Manager holds the active connection. Only one at a time.
 //
 // Single global connection. Make it map[name]*exec.Cmd if multi-connection matters.
@@ -216,7 +220,7 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 		args = append(args, "--auth-user-pass", credsPath)
 	}
 
-	cmd := exec.Command("pkexec", args...)
+	cmd := execCommand("pkexec", args...)
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		if credsPath != "" {
