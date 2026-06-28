@@ -168,7 +168,7 @@ func TestLogScroll(t *testing.T) {
 
 func TestConnStateBadge(t *testing.T) {
 	// Every state renders a non-empty, distinct badge.
-	states := []ConnState{StateIdle, StateConnecting, StateConnected, StateDisconnected, StateError}
+	states := []ConnState{StateIdle, StateConnecting, StateConnected, StateDisconnected, StateError, StateReconnecting}
 	seen := map[string]bool{}
 	for _, s := range states {
 		b := s.Badge()

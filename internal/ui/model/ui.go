@@ -5,6 +5,8 @@
 package model
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -13,6 +15,20 @@ import (
 	"github.com/omartelo/lazyovpn/internal/ui/utils"
 	"github.com/omartelo/lazyovpn/internal/vpn"
 )
+
+// Auto-reconnect tuning. When a live tunnel's process exits on its own (not a
+// user disconnect), lazyovpn redials the same config up to maxReconnects times,
+// waiting reconnectDelay between tries. A connection that stayed up at least
+// stableUptime is treated as healthy and earns the full retry budget back, so a
+// rare nightly drop keeps reconnecting forever while a tight flap gives up.
+const (
+	maxReconnects  = 5
+	reconnectDelay = 3 * time.Second
+	stableUptime   = 30 * time.Second
+)
+
+// reconnectMsg fires reconnectDelay after a drop to redial the connection.
+type reconnectMsg struct{}
 
 // sidebarWidth is the sidebar pane's outer width, in columns; the log pane
 // takes the rest of the terminal width.
@@ -91,6 +107,16 @@ type UI struct {
 	logCh   <-chan string // live stream of the active connection
 	sh      shared        // global state the panels read by pointer
 	w, h    int
+
+	// Auto-reconnect state for the live connection. No credentials are held in
+	// memory: reArmed is true only for a config we can both track (not daemon)
+	// and silently redial — no-auth, or creds saved in the keyring, fetched fresh
+	// at redial time via redialCreds (never retained). connectedAt stamps
+	// tunnel-up so a stable session earns its retry budget back.
+	reCfg       vpn.Config
+	reArmed     bool
+	reAttempts  int
+	connectedAt time.Time
 }
 
 // New builds the initial UI from the already-discovered configs.
@@ -117,14 +143,28 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // log from an old connection
 		}
 		m.log.AppendLog(msg.Line)
+		if m.log.State() == StateConnected && m.connectedAt.IsZero() {
+			m.connectedAt = time.Now() // tunnel-up: start the stability clock
+		}
 		m.syncConnected() // tunnel-up flips the sidebar marker green
 		return m, utils.WaitForLog(m.logCh)
 
 	case utils.LogClosedMsg:
 		if msg.Ch == m.logCh {
-			m.log.MarkClosed()
-			m.logCh = nil
-			m.syncConnected()
+			return m, m.handleDrop()
+		}
+		return m, nil
+
+	case reconnectMsg:
+		// Redial only if still waiting (not cancelled) and nothing else has
+		// since connected — a stale timer after the user reconnected is dropped.
+		if m.log.State() == StateReconnecting && m.logCh == nil {
+			if user, pass, ok := redialCreds(m.reCfg); ok {
+				return m.connect(m.reCfg, user, pass)
+			}
+			// Keyring entry vanished since the drop (forgotten mid-connection):
+			// nothing to redial with, so settle as closed.
+			m.settleClosed()
 		}
 		return m, nil
 
@@ -173,6 +213,11 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirm = dialog.NewConfirm("disconnect",
 					"Disconnect from\n\""+m.log.ActiveName()+"\"?", m.disconnect)
 				m.mode = modeConfirm
+			} else if m.log.State() == StateReconnecting {
+				// Cancel a pending auto-reconnect (no tunnel yet, so no confirm).
+				m.disarmReconnect()
+				m.log.MarkDisconnected()
+				m.syncConnected()
 			}
 			return m, nil
 		case "x":
@@ -269,12 +314,66 @@ func (m *UI) updateLogNav(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // disconnect tears down the live tunnel; it is the action behind the disconnect
-// confirm popup.
+// confirm popup. A user disconnect must not trigger auto-reconnect, so it
+// disarms first.
 func (m *UI) disconnect() {
+	m.disarmReconnect()
 	_ = m.mgr.Disconnect()
 	m.log.MarkDisconnected()
 	m.logCh = nil
 	m.syncConnected()
+}
+
+// handleDrop reacts to the live process exiting on its own (the only LogClosedMsg
+// that survives the stale-channel guard). If the tunnel had come up and the
+// config is trackable, it schedules an auto-reconnect and returns the timer cmd;
+// otherwise it marks the connection closed and returns nil.
+func (m *UI) handleDrop() tea.Cmd {
+	m.logCh = nil
+	wasUp := m.log.State() == StateConnected
+	if m.reArmed && wasUp {
+		if !m.connectedAt.IsZero() && time.Since(m.connectedAt) >= stableUptime {
+			m.reAttempts = 0 // it proved stable: earn the retry budget back
+		}
+		if m.reAttempts < maxReconnects {
+			m.reAttempts++
+			m.log.MarkReconnecting(m.reAttempts)
+			m.syncConnected()
+			return tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return reconnectMsg{} })
+		}
+	}
+	m.settleClosed()
+	return nil
+}
+
+// settleClosed marks the connection finished and abandons any reconnect effort —
+// the shared give-up path (retry budget spent, or no creds left to redial with).
+func (m *UI) settleClosed() {
+	m.log.MarkClosed()
+	m.disarmReconnect()
+	m.syncConnected()
+}
+
+// armReconnect arms auto-reconnect for cfg, holding no credentials: enabled only
+// when the connection is trackable (not a daemon, which forks out of reach) and
+// silently redialable (no-auth, or creds in the keyring — see redialCreds). It
+// resets the stability clock for the new attempt. Pairs with disarmReconnect.
+func (m *UI) armReconnect(cfg vpn.Config) {
+	m.reCfg = cfg
+	daemon, _ := vpn.HasDaemon(cfg)
+	_, _, redialable := redialCreds(cfg)
+	m.reArmed = !daemon && redialable
+	m.connectedAt = time.Time{}
+}
+
+// disarmReconnect forgets the live connection's redial state. Called on user
+// disconnect/cancel and when the retry budget runs out. No credentials to wipe —
+// none are ever held (see redialCreds).
+func (m *UI) disarmReconnect() {
+	m.reArmed = false
+	m.reAttempts = 0
+	m.reCfg = vpn.Config{}
+	m.connectedAt = time.Time{}
 }
 
 // enter connects the selected config, prompting for credentials first if needed.
@@ -288,6 +387,7 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 	if m.logCh != nil && cfg.Name == m.log.ActiveName() {
 		return m, nil
 	}
+	m.reAttempts = 0 // a manual connect starts with a full retry budget
 	needs, err := vpn.NeedsAuth(cfg)
 	if err != nil {
 		m.log.SetError(err.Error())
@@ -305,7 +405,8 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 	return m.connect(cfg, "", "")
 }
 
-// connect starts the connection and begins pumping its log stream.
+// connect starts the connection, arms auto-reconnect for it (see armReconnect),
+// and begins pumping its log stream.
 func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
 	ch, err := m.mgr.Connect(cfg, username, password)
 	if err != nil {
@@ -313,9 +414,31 @@ func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 		return m, nil
 	}
 	m.logCh = ch
+	m.armReconnect(cfg)
 	m.log.StartConnection(cfg.Name)
 	m.syncConnected() // a fresh connect clears any previous green marker
 	return m, utils.WaitForLog(ch)
+}
+
+// redialCreds resolves the credentials to reconnect cfg with WITHOUT retaining
+// them: a no-auth config needs none; a config with saved keyring creds loads
+// them on demand. A config that needs auth but has nothing in the keyring is not
+// redialable (ok=false) — auto-reconnect is a keyring feature, and credentials
+// typed once but not saved are deliberately never held. Any error (unreadable
+// config, keyring failure) resolves to not-redialable.
+func redialCreds(cfg vpn.Config) (user, pass string, ok bool) {
+	needs, err := vpn.NeedsAuth(cfg)
+	if err != nil {
+		return "", "", false
+	}
+	if !needs {
+		return "", "", true
+	}
+	user, pass, has, err := vpn.LoadCreds(cfg.Name)
+	if err != nil || !has {
+		return "", "", false
+	}
+	return user, pass, true
 }
 
 // syncConnected mirrors the log's connected state into the shared state

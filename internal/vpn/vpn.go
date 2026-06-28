@@ -121,10 +121,10 @@ func ImportConfig(srcPath string) (Config, error) {
 	return Config{Name: strings.TrimSuffix(base, ext), Path: dst}, nil
 }
 
-// NeedsAuth reports whether the config asks for interactive username/password —
-// a bare `auth-user-pass` directive with no credentials file. With a file
-// argument the credentials are already on disk, so no prompt is needed.
-func NeedsAuth(c Config) (bool, error) {
+// eachDirective calls match for every active directive line in the config —
+// blank lines and #/; comments skipped — stopping at the first line that
+// matches. It reports whether any line matched. fields is always non-empty.
+func eachDirective(c Config, match func(fields []string) bool) (bool, error) {
 	f, err := os.Open(c.Path)
 	if err != nil {
 		return false, fmt.Errorf("open config: %w", err)
@@ -137,15 +137,32 @@ func NeedsAuth(c Config) (bool, error) {
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if fields[0] == "auth-user-pass" && len(fields) == 1 {
-			return true, nil // bare directive: openvpn would prompt on a tty we don't have
+		if match(strings.Fields(line)) {
+			return true, nil
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return false, fmt.Errorf("read config: %w", err)
 	}
 	return false, nil
+}
+
+// NeedsAuth reports whether the config asks for interactive username/password —
+// a bare `auth-user-pass` directive with no credentials file. With a file
+// argument the credentials are already on disk, so no prompt is needed.
+func NeedsAuth(c Config) (bool, error) {
+	return eachDirective(c, func(f []string) bool {
+		// bare directive: openvpn would prompt on a tty we don't have
+		return f[0] == "auth-user-pass" && len(f) == 1
+	})
+}
+
+// HasDaemon reports whether the config forks into the background (a `daemon`
+// directive). openvpn's foreground process then exits right after setup, so
+// lazyovpn can't track the tunnel — auto-reconnect must stay off for such a
+// config or it would spawn a duplicate process on top of the live daemon.
+func HasDaemon(c Config) (bool, error) {
+	return eachDirective(c, func(f []string) bool { return f[0] == "daemon" })
 }
 
 // writeCredsFile writes username/password to a private, RAM-backed temp file for
