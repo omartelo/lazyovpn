@@ -164,9 +164,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Keyring entry vanished since the drop (forgotten mid-connection):
 			// nothing to redial with, so settle as closed.
-			m.log.MarkClosed()
-			m.disarmReconnect()
-			m.syncConnected()
+			m.settleClosed()
 		}
 		return m, nil
 
@@ -344,10 +342,28 @@ func (m *UI) handleDrop() tea.Cmd {
 			return tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return reconnectMsg{} })
 		}
 	}
+	m.settleClosed()
+	return nil
+}
+
+// settleClosed marks the connection finished and abandons any reconnect effort —
+// the shared give-up path (retry budget spent, or no creds left to redial with).
+func (m *UI) settleClosed() {
 	m.log.MarkClosed()
 	m.disarmReconnect()
 	m.syncConnected()
-	return nil
+}
+
+// armReconnect arms auto-reconnect for cfg, holding no credentials: enabled only
+// when the connection is trackable (not a daemon, which forks out of reach) and
+// silently redialable (no-auth, or creds in the keyring — see redialCreds). It
+// resets the stability clock for the new attempt. Pairs with disarmReconnect.
+func (m *UI) armReconnect(cfg vpn.Config) {
+	m.reCfg = cfg
+	daemon, _ := vpn.HasDaemon(cfg)
+	_, _, redialable := redialCreds(cfg)
+	m.reArmed = !daemon && redialable
+	m.connectedAt = time.Time{}
 }
 
 // disarmReconnect forgets the live connection's redial state. Called on user
@@ -389,11 +405,8 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 	return m.connect(cfg, "", "")
 }
 
-// connect starts the connection and begins pumping its log stream. It also arms
-// auto-reconnect when the connection can be silently redialed later: not a
-// daemon config (those fork out of our reach) and resolvable without a prompt
-// (no-auth, or creds in the keyring). No credentials are stashed — they are
-// fetched fresh at redial time.
+// connect starts the connection, arms auto-reconnect for it (see armReconnect),
+// and begins pumping its log stream.
 func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
 	ch, err := m.mgr.Connect(cfg, username, password)
 	if err != nil {
@@ -401,11 +414,7 @@ func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 		return m, nil
 	}
 	m.logCh = ch
-	m.reCfg = cfg
-	daemon, _ := vpn.HasDaemon(cfg)
-	_, _, redialable := redialCreds(cfg)
-	m.reArmed = !daemon && redialable
-	m.connectedAt = time.Time{} // restart the stability clock for this attempt
+	m.armReconnect(cfg)
 	m.log.StartConnection(cfg.Name)
 	m.syncConnected() // a fresh connect clears any previous green marker
 	return m, utils.WaitForLog(ch)
