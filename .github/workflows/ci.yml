@@ -35,12 +35,15 @@ jobs:
 
       - name: coverage summary
         run: |
-          total=$(go tool cover -func=coverage.out | tail -1)
-          echo "$total"
-          echo "### Coverage" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "$total" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tail -1 # raw line in the job log
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ {print $NF}')
+          {
+            echo "### Coverage"
+            echo
+            echo "| Metric | Value |"
+            echo "| --- | --- |"
+            echo "| Statements | \`$pct\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: upload coverage
         uses: actions/upload-artifact@v4
@@ -54,6 +57,9 @@ jobs:
   # config drift wouldn't surface until the release tag is pushed. The smoke
   # step proves the packaged binary actually runs.
   build:
+    # Gate the (slower) cross-compile + packaging behind the fast gates: only
+    # build the release artifacts once test and mutation are green.
+    needs: [test, mutation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,10 +103,22 @@ jobs:
           set +e
           gremlins unleash | tee gremlins.log
           code=${PIPESTATUS[0]}
+          eff=$(grep -oE 'Test efficacy: [0-9.]+' gremlins.log | grep -oE '[0-9.]+$')
+          mcov=$(grep -oE 'Mutator coverage: [0-9.]+' gremlins.log | grep -oE '[0-9.]+$')
+          killed=$(grep -oE 'Killed: [0-9]+' gremlins.log | grep -oE '[0-9]+$')
+          lived=$(grep -oE 'Lived: [0-9]+' gremlins.log | grep -oE '[0-9]+$')
+          notcov=$(grep -oE 'Not covered: [0-9]+' gremlins.log | grep -oE '[0-9]+$')
+          # gate lives in .gremlins.yaml (threshold.efficacy); keep in sync.
+          gate=$(awk -v e="$eff" 'BEGIN { print (e >= 85) ? "✅" : "❌" }')
           {
             echo "### Mutation testing"
-            echo '```'
-            grep -E "Killed:|Lived:|Test efficacy:|Mutator coverage:" gremlins.log
-            echo '```'
+            echo
+            echo "| Metric | Value |"
+            echo "| --- | --- |"
+            echo "| Killed | $killed |"
+            echo "| Lived | $lived |"
+            echo "| Not covered | $notcov |"
+            echo "| Test efficacy | \`${eff}%\` $gate (gate ≥ 85%) |"
+            echo "| Mutator coverage | \`${mcov}%\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$code"
