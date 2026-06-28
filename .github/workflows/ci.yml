@@ -54,6 +54,9 @@ jobs:
   # config drift wouldn't surface until the release tag is pushed. The smoke
   # step proves the packaged binary actually runs.
   build:
+    # Gate the (slower) cross-compile + packaging behind the fast gates: only
+    # build the release artifacts once test and mutation are green.
+    needs: [test, mutation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
