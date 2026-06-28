@@ -48,6 +48,34 @@ jobs:
           name: coverage
           path: coverage.out
 
+  # Cross-compile both release arches and package the tar.gz via the real
+  # .goreleaser.yaml — in snapshot mode (no publish). vet/test only build the
+  # host (linux/amd64), so without this an arm64-only break or a goreleaser
+  # config drift wouldn't surface until the release tag is pushed. The smoke
+  # step proves the packaged binary actually runs.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser changelog needs full history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          # --skip=before drops goreleaser's go-test hook; the test job covers it.
+          args: release --snapshot --clean --skip=before
+
+      - name: smoke the linux amd64 artifact
+        run: |
+          tar -xzf dist/lazyovpn_*_linux_amd64.tar.gz -C /tmp lazyovpn
+          /tmp/lazyovpn --version
+
   mutation:
     runs-on: ubuntu-latest
     steps:
