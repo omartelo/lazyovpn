@@ -63,7 +63,6 @@ const (
 // modal or confirm popup is up and consuming input.
 type appMode uint8
 
-// Possible appMode values.
 const (
 	modeNormal  appMode = iota
 	modeAuth            // credential modal is capturing input
@@ -75,7 +74,6 @@ const (
 // (modeNormal). focusLog hands keys to the log viewport for scrolling.
 type pane uint8
 
-// Possible pane values.
 const (
 	focusSidebar pane = iota // list navigation + connect
 	focusLog                 // scroll the live log viewport
@@ -202,7 +200,6 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.enter()
 		case "tab":
-			// Move focus to the log pane so it can be scrolled.
 			m.focus = focusLog
 			return m, nil
 		case "d":

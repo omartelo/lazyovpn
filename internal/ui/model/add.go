@@ -22,7 +22,7 @@ func (m *UI) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeNormal
 			return m, nil
 		case "r":
-			return m, m.picker.Open() // launch the chooser again
+			return m, m.picker.Open()
 		case "enter":
 			return m.addConfirm()
 		}

@@ -43,7 +43,7 @@ const privateFileMode os.FileMode = 0o600
 // swap pkexec/openvpn for a helper subprocess (see connect_test.go).
 var execCommand = exec.Command
 
-// Manager holds the active connection. Only one at a time.
+// Manager holds the active connection.
 //
 // Single global connection. Make it map[name]*exec.Cmd if multi-connection matters.
 type Manager struct {
