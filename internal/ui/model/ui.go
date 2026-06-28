@@ -108,14 +108,12 @@ type UI struct {
 	sh      shared        // global state the panels read by pointer
 	w, h    int
 
-	// Auto-reconnect state for the live connection. reUser/rePass live in
-	// memory only, for the connection's lifetime — the same window as the tmpfs
-	// creds file, never written to storage or logs (invariant #6). reArmed is
-	// false for configs we can't track (daemon). connectedAt stamps tunnel-up so
-	// a stable session earns its retry budget back.
+	// Auto-reconnect state for the live connection. No credentials are held in
+	// memory: reArmed is true only for a config we can both track (not daemon)
+	// and silently redial — no-auth, or creds saved in the keyring, fetched fresh
+	// at redial time via redialCreds (never retained). connectedAt stamps
+	// tunnel-up so a stable session earns its retry budget back.
 	reCfg       vpn.Config
-	reUser      string
-	rePass      string
 	reArmed     bool
 	reAttempts  int
 	connectedAt time.Time
@@ -161,7 +159,14 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Redial only if still waiting (not cancelled) and nothing else has
 		// since connected — a stale timer after the user reconnected is dropped.
 		if m.log.State() == StateReconnecting && m.logCh == nil {
-			return m.connect(m.reCfg, m.reUser, m.rePass)
+			if user, pass, ok := redialCreds(m.reCfg); ok {
+				return m.connect(m.reCfg, user, pass)
+			}
+			// Keyring entry vanished since the drop (forgotten mid-connection):
+			// nothing to redial with, so settle as closed.
+			m.log.MarkClosed()
+			m.disarmReconnect()
+			m.syncConnected()
 		}
 		return m, nil
 
@@ -345,14 +350,13 @@ func (m *UI) handleDrop() tea.Cmd {
 	return nil
 }
 
-// disarmReconnect forgets the live connection's redial state and wipes the
-// in-memory credentials. Called on user disconnect/cancel and when the retry
-// budget runs out.
+// disarmReconnect forgets the live connection's redial state. Called on user
+// disconnect/cancel and when the retry budget runs out. No credentials to wipe —
+// none are ever held (see redialCreds).
 func (m *UI) disarmReconnect() {
 	m.reArmed = false
 	m.reAttempts = 0
 	m.reCfg = vpn.Config{}
-	m.reUser, m.rePass = "", ""
 	m.connectedAt = time.Time{}
 }
 
@@ -386,8 +390,10 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 }
 
 // connect starts the connection and begins pumping its log stream. It also arms
-// auto-reconnect for the connection (disarmed for a daemon config, which forks
-// out of our reach) and stashes the creds in memory to redial with.
+// auto-reconnect when the connection can be silently redialed later: not a
+// daemon config (those fork out of our reach) and resolvable without a prompt
+// (no-auth, or creds in the keyring). No credentials are stashed — they are
+// fetched fresh at redial time.
 func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.Cmd) {
 	ch, err := m.mgr.Connect(cfg, username, password)
 	if err != nil {
@@ -395,13 +401,35 @@ func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 		return m, nil
 	}
 	m.logCh = ch
-	m.reCfg, m.reUser, m.rePass = cfg, username, password
-	daemon, _ := vpn.HasDaemon(cfg) // can't track a daemonized tunnel → don't redial it
-	m.reArmed = !daemon
+	m.reCfg = cfg
+	daemon, _ := vpn.HasDaemon(cfg)
+	_, _, redialable := redialCreds(cfg)
+	m.reArmed = !daemon && redialable
 	m.connectedAt = time.Time{} // restart the stability clock for this attempt
 	m.log.StartConnection(cfg.Name)
 	m.syncConnected() // a fresh connect clears any previous green marker
 	return m, utils.WaitForLog(ch)
+}
+
+// redialCreds resolves the credentials to reconnect cfg with WITHOUT retaining
+// them: a no-auth config needs none; a config with saved keyring creds loads
+// them on demand. A config that needs auth but has nothing in the keyring is not
+// redialable (ok=false) — auto-reconnect is a keyring feature, and credentials
+// typed once but not saved are deliberately never held. Any error (unreadable
+// config, keyring failure) resolves to not-redialable.
+func redialCreds(cfg vpn.Config) (user, pass string, ok bool) {
+	needs, err := vpn.NeedsAuth(cfg)
+	if err != nil {
+		return "", "", false
+	}
+	if !needs {
+		return "", "", true
+	}
+	user, pass, has, err := vpn.LoadCreds(cfg.Name)
+	if err != nil || !has {
+		return "", "", false
+	}
+	return user, pass, true
 }
 
 // syncConnected mirrors the log's connected state into the shared state

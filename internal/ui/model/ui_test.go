@@ -524,18 +524,74 @@ func TestStaleReconnectMsgIgnored(t *testing.T) {
 	}
 }
 
-// A user disconnect disarms auto-reconnect and wipes the in-memory credentials
-// (invariant #6: creds live no longer than the connection they belong to).
+// A user disconnect disarms auto-reconnect.
 func TestDisconnectDisarmsReconnect(t *testing.T) {
 	m, _ := armedConnected(t, "alpha")
-	m.reUser, m.rePass = "u", "p"
 
 	m.disconnect()
 	if m.reArmed {
 		t.Error("reArmed still set after a user disconnect")
 	}
-	if m.reUser != "" || m.rePass != "" {
-		t.Error("credentials not wiped after disconnect")
+}
+
+// writeTempConfig writes a throwaway .ovpn and returns its Config (Name = name).
+func writeTempConfig(t *testing.T, name, body string) vpn.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name+".ovpn")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return vpn.Config{Name: name, Path: path}
+}
+
+// redialCreds is the contract for auto-reconnect: a no-auth config is redialable
+// with no creds; a needs-auth config is redialable only when its creds are in
+// the keyring (fetched on demand), and not at all otherwise.
+func TestRedialCreds(t *testing.T) {
+	keyring.MockInit()
+	plain := writeTempConfig(t, "plain", "client\ndev tun\n")
+	secured := writeTempConfig(t, "secured", "client\nauth-user-pass\n")
+
+	if u, p, ok := redialCreds(plain); !ok || u != "" || p != "" {
+		t.Errorf("redialCreds(no-auth) = %q,%q,%v; want \"\",\"\",true", u, p, ok)
+	}
+	if _, _, ok := redialCreds(secured); ok {
+		t.Error("redialCreds(needs-auth, no keyring) reported redialable; want not")
+	}
+
+	if err := vpn.SaveCreds(secured.Name, "bob", "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	if u, p, ok := redialCreds(secured); !ok || u != "bob" || p != "s3cret" {
+		t.Errorf("redialCreds(needs-auth, saved) = %q,%q,%v; want bob,s3cret,true", u, p, ok)
+	}
+}
+
+// If the keyring entry is forgotten between the drop and the redial timer firing,
+// the redial gives up instead of spawning openvpn (no creds to use).
+func TestReconnectFireGivesUpWithoutKeyring(t *testing.T) {
+	keyring.MockInit()
+	cfg := writeTempConfig(t, "secured", "client\nauth-user-pass\n") // needs auth, nothing saved
+
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection(cfg.Name)
+	m.log.MarkReconnecting(1) // -> StateReconnecting
+	m.reCfg = cfg
+	m.reArmed = true
+	m.logCh = nil
+
+	out, cmd := m.Update(reconnectMsg{})
+	mm := out.(*UI)
+	if cmd != nil {
+		t.Error("redial with no keyring creds issued a command (spawned openvpn)")
+	}
+	if mm.log.State() != StateDisconnected {
+		t.Errorf("state = %v, want StateDisconnected after give-up", mm.log.State())
+	}
+	if mm.reArmed {
+		t.Error("reArmed still set after give-up")
 	}
 }
 
