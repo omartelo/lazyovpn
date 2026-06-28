@@ -3,6 +3,7 @@ package vpn
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +198,40 @@ func TestSecondConnectKillsFirst(t *testing.T) {
 	drain(t, ch1) // the first connection must be torn down by the second
 	_ = m.Disconnect()
 	drain(t, ch2)
+}
+
+// If openvpn fails to start, Connect must report the error and leave no
+// credentials file behind — a failed connect must not leak a password file.
+func TestConnectStartErrorRemovesCreds(t *testing.T) {
+	runtime := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtime)
+	swap(t, func(string, ...string) *exec.Cmd {
+		return exec.Command("/nonexistent/lazyovpn-bogus") // Start() fails
+	})
+	cfg := writeConfig(t, "client\nauth-user-pass\n")
+
+	if _, err := NewManager().Connect(cfg, "alice", "s3cret"); err == nil {
+		t.Fatal("Connect: want error when openvpn fails to start, got nil")
+	}
+
+	entries, err := os.ReadDir(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("creds file leaked after start failure: %v", entries)
+	}
+}
+
+// If the credentials file cannot be written, Connect fails before spawning
+// anything — no process, no error swallowed.
+func TestConnectWriteCredsError(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "missing")) // CreateTemp fails
+	cfg := writeConfig(t, "client\nauth-user-pass\n")
+
+	if _, err := NewManager().Connect(cfg, "alice", "s3cret"); err == nil {
+		t.Fatal("Connect: want error when the creds file cannot be written, got nil")
+	}
 }
 
 // swap replaces execCommand for the duration of a test and restores it after.
