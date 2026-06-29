@@ -37,8 +37,6 @@ Download the latest release binary, verify its checksum, and install it:
 curl -fsSL https://raw.githubusercontent.com/omartelo/lazyovpn/main/install.sh | sh
 ```
 
-Pin a version with `VERSION=v0.4.0` or change the destination with `BIN_DIR=~/.local/bin`.
-
 #### Go
 
 ```bash
