@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `doctor` command (`lazyovpn doctor`) that checks the external programs
+  lazyovpn relies on: `openvpn` and `pkexec` (required — the command exits
+  non-zero if either is missing) and a file chooser (`zenity`/`kdialog`,
+  optional — only needed to import configs from inside the TUI). Each
+  dependency is reported with its resolved path or an install hint.
+
 ## [0.4.0] - 2026-06-28
 
 ### Added
