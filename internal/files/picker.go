@@ -34,6 +34,16 @@ var choosers = []chooser{
 	}},
 }
 
+// ChooserBins lists the supported file-chooser programs in priority order, so
+// callers (the doctor command) can probe for them without duplicating the list.
+func ChooserBins() []string {
+	bins := make([]string, len(choosers))
+	for i, c := range choosers {
+		bins[i] = c.bin
+	}
+	return bins
+}
+
 // resolveChooser returns the first installed file-chooser dialog.
 func resolveChooser() (chooser, bool) {
 	for _, c := range choosers {
