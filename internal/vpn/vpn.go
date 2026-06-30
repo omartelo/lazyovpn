@@ -10,9 +10,12 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/omartelo/lazyovpn/internal/files"
 )
@@ -200,6 +203,35 @@ func writeCredsFile(username, password string) (string, error) {
 	return f.Name(), nil
 }
 
+// openPTY allocates a pseudo-terminal and returns its master (read) and slave
+// (write) ends. openvpn's stdout/stderr go to the slave so the child sees a tty
+// and libc line-buffers its log. Over a plain pipe openvpn block-buffers (4KB);
+// at low verb the tunnel-up line "Initialization Sequence Completed" — the last
+// line, with nothing after it to fill the buffer — never reaches us until the
+// process exits, so the UI hangs on "connecting…" for an already-up tunnel.
+// Linux-only, like the rest of the tool (file chooser, etc.).
+func openPTY() (master, slave *os.File, err error) {
+	master, err = os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open ptmx: %w", err)
+	}
+	if err := unix.IoctlSetPointerInt(int(master.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("unlock pty: %w", err)
+	}
+	n, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("pty number: %w", err)
+	}
+	slave, err = os.OpenFile("/dev/pts/"+strconv.Itoa(n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("open pts %d: %w", n, err)
+	}
+	return master, slave, nil
+}
+
 // currentUsername is the OS user the TUI runs as, for openvpn's
 // --management-client-user — so the root openvpn lets this (unprivileged) user
 // connect to its management socket. Empty if it can't be determined.
@@ -297,25 +329,27 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	}
 
 	cmd := execCommand("pkexec", args...)
-	pr, pw, err := os.Pipe()
+	// A pty (not a plain pipe) so openvpn line-buffers — see openPTY. We read its
+	// combined stdout+stderr off the master end.
+	master, slave, err := openPTY()
 	if err != nil {
 		if credsPath != "" {
 			os.Remove(credsPath)
 		}
-		return nil, fmt.Errorf("create pipe: %w", err)
+		return nil, fmt.Errorf("create pty: %w", err)
 	}
-	cmd.Stdout = pw
-	cmd.Stderr = pw
+	cmd.Stdout = slave
+	cmd.Stderr = slave
 
 	if err := cmd.Start(); err != nil {
-		pr.Close()
-		pw.Close()
+		master.Close()
+		slave.Close()
 		if credsPath != "" {
 			os.Remove(credsPath)
 		}
 		return nil, fmt.Errorf("start openvpn: %w", err)
 	}
-	pw.Close() // the child kept its own copy of the fd
+	slave.Close() // the child kept its own copy of the fd
 
 	logs := make(chan string, logBufferLines)
 	done := make(chan struct{})
@@ -334,8 +368,11 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 			defer os.Remove(mgmtSock) // openvpn unlinks it on a clean exit; tidy up otherwise
 		}
 		defer cmd.Wait() // reaper: runs on process exit (its own or via Kill)
-		defer pr.Close()
-		sc := bufio.NewScanner(pr)
+		defer master.Close()
+		// On child exit the pty master read returns EIO, not a clean EOF; the
+		// scanner stops either way and we don't inspect sc.Err(), so it reads as a
+		// normal end-of-stream (same as the old pipe's EOF).
+		sc := bufio.NewScanner(master)
 		for sc.Scan() {
 			select {
 			case logs <- sc.Text():

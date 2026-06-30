@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // These tests exercise Manager.Connect/Disconnect/stop — the privileged process
@@ -85,6 +87,14 @@ func TestHelperProcess(t *testing.T) {
 		for _, ln := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 			os.Stdout.WriteString("CRED " + ln + "\n")
 		}
+	case "tty":
+		// Prove openvpn's stdout is a tty. TCGETS succeeds only on a terminal; a
+		// plain pipe would make libc block-buffer the tunnel-up marker.
+		if _, err := unix.IoctlGetTermios(int(os.Stdout.Fd()), unix.TCGETS); err == nil {
+			os.Stdout.WriteString("ISATTY yes\n")
+		} else {
+			os.Stdout.WriteString("ISATTY no\n")
+		}
 	case "sleep":
 		// Stay alive until Kill'd (no goroutines parked → real sleep, not select{}).
 		time.Sleep(time.Hour)
@@ -148,6 +158,34 @@ func TestConnectStreamsThenCloses(t *testing.T) {
 		if lines[i] != want[i] {
 			t.Errorf("line %d = %q, want %q", i, lines[i], want[i])
 		}
+	}
+}
+
+// Connect must hand openvpn a tty for stdout, not a pipe. Over a pipe libc
+// block-buffers openvpn's log, so at low verb the final "Initialization Sequence
+// Completed" line never reaches the UI until the process exits — the tunnel
+// shows "connecting…" forever despite being up. Swapping the pty back to
+// os.Pipe flips this assertion to "ISATTY no".
+func TestConnectGivesChildATTY(t *testing.T) {
+	swap(t, fakeExec("tty"))
+	cfg := writeConfig(t, "client\n")
+
+	ch, err := NewManager().Connect(cfg, "", "")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	saw := false
+	for _, ln := range drain(t, ch) {
+		switch ln {
+		case "ISATTY yes":
+			saw = true
+		case "ISATTY no":
+			t.Error("openvpn stdout is not a tty — its log will block-buffer")
+		}
+	}
+	if !saw {
+		t.Error("helper never reported tty status")
 	}
 }
 
