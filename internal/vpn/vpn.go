@@ -290,6 +290,48 @@ func signalQuit(sock string) {
 	_, _ = io.Copy(io.Discard, c)
 }
 
+// MgmtSock returns the active connection's management socket path, or "" if
+// nothing is connected. The UI polls QueryState on it to detect tunnel-up.
+func (m *Manager) MgmtSock() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mgmtSock
+}
+
+// QueryState asks openvpn's management socket for its current connection state
+// (CONNECTED, CONNECTING, RECONNECTING, EXITING, …) and returns the state name,
+// or "" on any error. This is the authoritative tunnel-up signal: unlike
+// scraping the log for "Initialization Sequence Completed", it works regardless
+// of the config's verb/mute, which can suppress that line entirely.
+func QueryState(sock string) string {
+	c, err := net.DialTimeout("unix", sock, time.Second)
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	if _, err := c.Write([]byte("state\n")); err != nil {
+		return ""
+	}
+	var state string
+	sc := bufio.NewScanner(c)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "END" {
+			break
+		}
+		if strings.HasPrefix(line, ">") {
+			continue // async notifications: >INFO: banner, >STATE:, etc.
+		}
+		// state row: <unixtime>,<STATE>,<desc>,<localip>,<remoteip>,...
+		// openvpn lists history oldest-first, so the last row is the current state.
+		if f := strings.Split(line, ","); len(f) >= 2 && f[1] != "" {
+			state = f[1]
+		}
+	}
+	return state
+}
+
 // Connect starts openvpn via pkexec (prompts the user for root) and returns a
 // channel of stdout+stderr lines. The channel closes when openvpn exits.
 // Any previous connection is killed first.

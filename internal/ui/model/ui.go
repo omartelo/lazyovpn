@@ -30,6 +30,18 @@ const (
 // reconnectMsg fires reconnectDelay after a drop to redial the connection.
 type reconnectMsg struct{}
 
+// statePollInterval is how often the UI polls openvpn's management state to
+// detect tunnel-up while a connection is coming up.
+const statePollInterval = 1 * time.Second
+
+// statePollMsg ticks the management-state poll; stateResultMsg carries the state
+// name a poll read (tagged with its socket so a poll from a previous connection
+// can't flip the badge for the current one — the stale-channel guard, by socket).
+type (
+	statePollMsg   struct{}
+	stateResultMsg struct{ sock, state string }
+)
+
 // sidebarWidth is the sidebar pane's outer width, in columns; the log pane
 // takes the rest of the terminal width.
 const sidebarWidth = 42
@@ -152,6 +164,34 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleDrop()
 		}
 		return m, nil
+
+	case statePollMsg:
+		// Poll only while a connection is coming up; stop once it is connected,
+		// gone, or settled. The dial runs off the UI goroutine in the returned cmd.
+		if m.logCh == nil || m.log.State() != StateConnecting {
+			return m, nil
+		}
+		sock := m.mgr.MgmtSock()
+		if sock == "" {
+			return m, m.pollStateTick() // openvpn hasn't opened the socket yet
+		}
+		return m, func() tea.Msg { return stateResultMsg{sock: sock, state: vpn.QueryState(sock)} }
+
+	case stateResultMsg:
+		// Drop a result from a previous connection (switch/reconnect) — the socket
+		// identifies it, like the log stream's stale-channel guard.
+		if msg.sock != m.mgr.MgmtSock() || m.logCh == nil || m.log.State() != StateConnecting {
+			return m, nil
+		}
+		if msg.state == "CONNECTED" {
+			m.log.MarkConnected()
+			if m.connectedAt.IsZero() {
+				m.connectedAt = time.Now() // tunnel-up: start the stability clock
+			}
+			m.syncConnected()
+			return m, nil // done polling
+		}
+		return m, m.pollStateTick() // still coming up — poll again
 
 	case reconnectMsg:
 		// Redial only if still waiting (not cancelled) and nothing else has
@@ -423,7 +463,14 @@ func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 	m.armReconnect(cfg)
 	m.log.StartConnection(cfg.Name)
 	m.syncConnected() // a fresh connect clears any previous green marker
-	return m, utils.WaitForLog(ch)
+	// Pump the log for display and poll the management state for tunnel-up.
+	return m, tea.Batch(utils.WaitForLog(ch), m.pollStateTick())
+}
+
+// pollStateTick schedules the next management-state poll. Polling runs while the
+// connection is coming up and stops once it reaches connected (see statePollMsg).
+func (m *UI) pollStateTick() tea.Cmd {
+	return tea.Tick(statePollInterval, func(time.Time) tea.Msg { return statePollMsg{} })
 }
 
 // redialCreds resolves the credentials to reconnect cfg with WITHOUT retaining

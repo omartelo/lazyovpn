@@ -36,18 +36,21 @@ func TestLogStartConnection(t *testing.T) {
 	}
 }
 
+// Tunnel-up is no longer scraped from the log (a low-verb/mute config omits the
+// marker): AppendLog leaves the state alone, MarkConnected (driven by the
+// management state poll) is what flips it to connected.
 func TestLogConnectedDetection(t *testing.T) {
 	term := newSizedLog()
 	term.StartConnection("alpha")
 
-	term.AppendLog("Mon Jun 24 ... TLS handshake")
+	term.AppendLog("Mon Jun 24 ... Initialization Sequence Completed")
 	if term.State() != StateConnecting {
-		t.Errorf("State() = %v before marker, want StateConnecting", term.State())
+		t.Errorf("State() = %v, want StateConnecting — log content must not flip the badge", term.State())
 	}
 
-	term.AppendLog("Mon Jun 24 ... " + connectedMarker)
+	term.MarkConnected()
 	if term.State() != StateConnected {
-		t.Errorf("State() = %v after marker, want StateConnected", term.State())
+		t.Errorf("State() = %v after MarkConnected, want StateConnected", term.State())
 	}
 }
 

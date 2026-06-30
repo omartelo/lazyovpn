@@ -377,6 +377,43 @@ func TestSignalQuitNoListener(t *testing.T) {
 	}
 }
 
+// QueryState returns openvpn's current management state — the authoritative
+// tunnel-up signal that replaces scraping the log for a marker a low-verb/mute
+// config may never print. It must pick the latest row when history has several.
+func TestQueryStateReturnsCurrent(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		fmt.Fprint(c, ">INFO:OpenVPN Management Interface Version 5\r\n")
+		bufio.NewReader(c).ReadString('\n') // the "state" request
+		// History oldest-first, CR-LF like openvpn; CONNECTED is the current row.
+		fmt.Fprint(c, "1700000000,CONNECTING,,,,\r\n")
+		fmt.Fprint(c, "1700000005,CONNECTED,SUCCESS,10.8.0.2,1.2.3.4,1194,,\r\n")
+		fmt.Fprint(c, "END\r\n")
+	}()
+
+	if got := QueryState(sock); got != "CONNECTED" {
+		t.Errorf("QueryState = %q, want CONNECTED (latest row)", got)
+	}
+}
+
+// QueryState returns "" (no panic, no hang) when nothing is listening.
+func TestQueryStateNoListener(t *testing.T) {
+	if got := QueryState(filepath.Join(t.TempDir(), "nope.sock")); got != "" {
+		t.Errorf("QueryState on a dead socket = %q, want empty", got)
+	}
+}
+
 // swap replaces execCommand for the duration of a test and restores it after.
 func swap(t *testing.T, fn func(string, ...string) *exec.Cmd) {
 	t.Helper()

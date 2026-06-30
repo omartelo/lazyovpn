@@ -553,6 +553,65 @@ func TestQuitDisarmsReconnect(t *testing.T) {
 	}
 }
 
+// connectingUI builds a UI mid-connect: state StateConnecting with a live logCh,
+// the state the management-state poll resolves. MgmtSock() is "" for a Manager
+// with no real connection — the poll tags its result with that same value.
+func connectingUI(t *testing.T, name string) *UI {
+	t.Helper()
+	cfg := vpn.Config{Name: name, Path: "/x/" + name + ".ovpn"}
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection(name)
+	m.logCh = make(chan string)
+	return m
+}
+
+// A CONNECTED management state flips the badge to connected and starts the
+// stability clock — with no "Initialization Sequence Completed" in the log.
+func TestStateResultConnects(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	out, _ := m.Update(stateResultMsg{sock: m.mgr.MgmtSock(), state: "CONNECTED"})
+	mm := out.(*UI)
+
+	if mm.log.State() != StateConnected {
+		t.Errorf("State() = %v after CONNECTED, want StateConnected", mm.log.State())
+	}
+	if mm.connectedAt.IsZero() {
+		t.Error("connectedAt not started when the tunnel came up")
+	}
+}
+
+// A result tagged with a different socket (a poll from a previous connection
+// after a switch/reconnect) must not flip the current connection's badge.
+func TestStateResultStaleDropped(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	out, _ := m.Update(stateResultMsg{sock: "/some/other.sock", state: "CONNECTED"})
+	mm := out.(*UI)
+
+	if mm.log.State() != StateConnecting {
+		t.Errorf("a stale-socket result flipped the badge: State() = %v", mm.log.State())
+	}
+}
+
+// A poll that is not yet CONNECTED keeps polling (returns a tick cmd) and leaves
+// the badge connecting.
+func TestStateResultReschedulesWhileConnecting(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	out, cmd := m.Update(stateResultMsg{sock: m.mgr.MgmtSock(), state: "CONNECTING"})
+	mm := out.(*UI)
+
+	if mm.log.State() != StateConnecting {
+		t.Errorf("State() = %v, want StateConnecting (not up yet)", mm.log.State())
+	}
+	if cmd == nil {
+		t.Error("a not-yet-connected poll returned no cmd — polling stopped early")
+	}
+}
+
 // writeTempConfig writes a throwaway .ovpn and returns its Config (Name = name).
 func writeTempConfig(t *testing.T, name, body string) vpn.Config {
 	t.Helper()

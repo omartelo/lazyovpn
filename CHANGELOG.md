@@ -18,11 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself (`signal SIGTERM`) on teardown; a `defer` in the launcher guarantees
   this on every exit path, including ctrl+c.
 - The status badge no longer hangs on `connecting…` after a tunnel is actually
-  up. openvpn is now given a pseudo-terminal instead of a plain pipe, so it
-  line-buffers its log and the `Initialization Sequence Completed` marker (the
-  last line at low `verb`, with nothing after it to flush a 4KB block buffer)
-  reaches the UI immediately. Previously such configs stayed `connecting…` until
-  the process exited, despite the connection working.
+  up. Tunnel-up is now detected from openvpn's **management state**
+  (`CONNECTED`), polled on the management socket, instead of scraping the log for
+  the `Initialization Sequence Completed` line — a low-`verb`/`mute` config can
+  suppress that line entirely, leaving the badge stuck forever despite a working
+  connection. The management state is authoritative regardless of log verbosity.
+- The log pane now streams in real time. openvpn is given a pseudo-terminal
+  instead of a plain pipe, so it line-buffers its output (over a pipe it
+  block-buffers in ~4KB chunks, so lines arrived late and bunched up).
 
 ## [0.5.0] - 2026-06-29
 
