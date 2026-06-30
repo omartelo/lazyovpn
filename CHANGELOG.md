@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Disconnecting (and quitting) now actually tears the tunnel down. openvpn runs
+  as root via `pkexec` while the TUI is unprivileged, so a direct `kill` was
+  silently denied (`EPERM`) — every connect/switch/quit leaked a live openvpn
+  process, and a second connection with the same certificate flapped against the
+  server. lazyovpn now opens openvpn's management socket
+  (`--management … unix --management-client-user`) and asks openvpn to terminate
+  itself (`signal SIGTERM`) on teardown; a `defer` in the launcher guarantees
+  this on every exit path, including ctrl+c.
+
 ## [0.5.0] - 2026-06-29
 
 ### Added

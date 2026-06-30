@@ -14,6 +14,10 @@ func runApp() error {
 	configs := vpn.Discover()
 
 	mgr := vpn.NewManager()
+	// Tear the tunnel down on every exit path — q, ctrl+c, or error. Without this
+	// a ctrl+c leaves the root openvpn running (the TUI can't kill it directly);
+	// Disconnect signals it over the management socket. No-op if nothing is up.
+	defer mgr.Disconnect()
 	// v2: alt screen is declarative — set in the model's View(), not here.
 	p := tea.NewProgram(model.New(configs, mgr))
 	_, err := p.Run()
