@@ -11,9 +11,6 @@ import (
 	"github.com/omartelo/lazyovpn/internal/ui/common"
 )
 
-// connectedMarker is the openvpn log line that signals the tunnel is up.
-const connectedMarker = "Initialization Sequence Completed"
-
 // ConnState is the lifecycle of the active connection.
 type ConnState int
 
@@ -90,11 +87,11 @@ func (l *Log) StartConnection(name string) {
 	l.vp.GotoTop()
 }
 
-// AppendLog records one line from the active stream and detects tunnel-up.
+// AppendLog records one line from the active stream. Tunnel-up is detected
+// separately via the management state poll (see vpn.QueryState), not by scanning
+// log content — a low-verb/mute config can omit the "Initialization Sequence
+// Completed" line entirely while still being connected.
 func (l *Log) AppendLog(line string) {
-	if strings.Contains(line, connectedMarker) {
-		l.state = StateConnected
-	}
 	b := l.buffers[l.activeName]
 	if b == nil {
 		return
@@ -118,6 +115,12 @@ func (l *Log) Scroll(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	l.vp, cmd = l.vp.Update(msg)
 	return cmd
+}
+
+// MarkConnected enters the connected state — the tunnel is up. Driven by the
+// management state poll (vpn.QueryState), not by log content.
+func (l *Log) MarkConnected() {
+	l.state = StateConnected
 }
 
 // MarkClosed records that the active stream ended (process exited).

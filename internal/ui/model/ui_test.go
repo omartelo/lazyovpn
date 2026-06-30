@@ -534,22 +534,151 @@ func TestDisconnectDisarmsReconnect(t *testing.T) {
 	}
 }
 
-// Quitting must disarm auto-reconnect and clear logCh too — otherwise a drop in
-// flight as the program exits could reschedule a redial, respawning the (root)
-// openvpn the user just asked to quit. It also returns tea.Quit.
-func TestQuitDisarmsReconnect(t *testing.T) {
+// Quitting with a live connection confirms first (q/ctrl+c are easy to
+// fat-finger). Confirming tears down and disarms auto-reconnect — otherwise a
+// drop in flight as the program exits could reschedule a redial, respawning the
+// (root) openvpn the user just asked to quit — and returns tea.Quit.
+func TestQuitConfirmsThenTearsDown(t *testing.T) {
 	m, _ := armedConnected(t, "alpha")
 
 	out, cmd := m.quit()
 	mm := out.(*UI)
-	if mm.reArmed {
-		t.Error("reArmed still set after quit — a late drop could respawn openvpn")
+	if mm.mode != modeConfirm {
+		t.Fatalf("quit with a live connection did not confirm (mode=%v)", mm.mode)
 	}
-	if mm.logCh != nil {
-		t.Error("logCh not cleared after quit")
+	if cmd != nil {
+		t.Error("quit ran the teardown before the user confirmed")
+	}
+	if !mm.reArmed || mm.logCh == nil {
+		t.Error("quit tore the connection down before the user confirmed")
+	}
+
+	out2, cmd2 := mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	done := out2.(*UI)
+	if done.reArmed {
+		t.Error("reArmed still set after confirming quit — a late drop could respawn openvpn")
+	}
+	if done.logCh != nil {
+		t.Error("logCh not cleared after confirming quit")
+	}
+	if cmd2 == nil {
+		t.Error("confirming quit returned no command, expected tea.Quit")
+	}
+}
+
+// Cancelling the quit confirm keeps the connection and the program running.
+func TestQuitConfirmCancelKeepsConnection(t *testing.T) {
+	m, _ := armedConnected(t, "alpha")
+
+	out, _ := m.quit()
+	out, cmd := out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	kept := out.(*UI)
+	if kept.mode != modeNormal {
+		t.Errorf("mode = %v after cancel, want modeNormal", kept.mode)
+	}
+	if kept.logCh == nil {
+		t.Error("logCh cleared after cancelling quit, want the connection kept")
+	}
+	if cmd != nil {
+		t.Error("cancelling quit returned a cmd, want none")
+	}
+}
+
+// Quitting with nothing connected goes straight out — no confirm popup.
+func TestQuitNoConnectionImmediate(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, cmd := m.quit()
+	if got := out.(*UI).mode; got == modeConfirm {
+		t.Error("quit asked for confirmation with no active connection")
 	}
 	if cmd == nil {
-		t.Error("quit returned no command, expected tea.Quit")
+		t.Error("quit with no connection returned no command, expected tea.Quit")
+	}
+}
+
+// connectingUI builds a UI mid-connect: state StateConnecting with a live logCh,
+// the state the management-state poll resolves. MgmtSock() is "" for a Manager
+// with no real connection — the poll tags its result with that same value.
+func connectingUI(t *testing.T, name string) *UI {
+	t.Helper()
+	cfg := vpn.Config{Name: name, Path: "/x/" + name + ".ovpn"}
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection(name)
+	m.logCh = make(chan string)
+	return m
+}
+
+// A CONNECTED management state flips the badge to connected and starts the
+// stability clock — with no "Initialization Sequence Completed" in the log.
+func TestStateResultConnects(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	out, _ := m.Update(stateResultMsg{sock: m.mgr.MgmtSock(), state: "CONNECTED"})
+	mm := out.(*UI)
+
+	if mm.log.State() != StateConnected {
+		t.Errorf("State() = %v after CONNECTED, want StateConnected", mm.log.State())
+	}
+	if mm.connectedAt.IsZero() {
+		t.Error("connectedAt not started when the tunnel came up")
+	}
+}
+
+// A result tagged with a different socket (a poll from a previous connection
+// after a switch/reconnect) must not flip the current connection's badge.
+func TestStateResultStaleDropped(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	out, _ := m.Update(stateResultMsg{sock: "/some/other.sock", state: "CONNECTED"})
+	mm := out.(*UI)
+
+	if mm.log.State() != StateConnecting {
+		t.Errorf("a stale-socket result flipped the badge: State() = %v", mm.log.State())
+	}
+}
+
+// A poll that is not yet CONNECTED keeps polling (returns a tick cmd) and leaves
+// the badge connecting.
+func TestStateResultReschedulesWhileConnecting(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	out, cmd := m.Update(stateResultMsg{sock: m.mgr.MgmtSock(), state: "CONNECTING"})
+	mm := out.(*UI)
+
+	if mm.log.State() != StateConnecting {
+		t.Errorf("State() = %v, want StateConnecting (not up yet)", mm.log.State())
+	}
+	if cmd == nil {
+		t.Error("a not-yet-connected poll returned no cmd — polling stopped early")
+	}
+}
+
+// A poll tick while connecting keeps polling even when the socket isn't open yet
+// (MgmtSock is "" here): it must reschedule, not give up.
+func TestStatePollReschedulesWhileConnecting(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	_, cmd := m.Update(statePollMsg{})
+	if cmd == nil {
+		t.Error("poll tick while connecting returned no cmd — polling stopped early")
+	}
+}
+
+// A poll tick stops (no cmd) once nothing is coming up — no busy-loop after the
+// connection settles.
+func TestStatePollStopsWhenNotConnecting(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI) // state Idle, logCh nil
+
+	_, cmd := m.Update(statePollMsg{})
+	if cmd != nil {
+		t.Error("poll tick with no live connection returned a cmd — should stop")
 	}
 }
 

@@ -10,9 +10,12 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/omartelo/lazyovpn/internal/files"
 )
@@ -200,6 +203,35 @@ func writeCredsFile(username, password string) (string, error) {
 	return f.Name(), nil
 }
 
+// openPTY allocates a pseudo-terminal and returns its master (read) and slave
+// (write) ends. openvpn's stdout/stderr go to the slave so the child sees a tty
+// and libc line-buffers its log. Over a plain pipe openvpn block-buffers (4KB);
+// at low verb the tunnel-up line "Initialization Sequence Completed" — the last
+// line, with nothing after it to fill the buffer — never reaches us until the
+// process exits, so the UI hangs on "connecting…" for an already-up tunnel.
+// Linux-only, like the rest of the tool (file chooser, etc.).
+func openPTY() (master, slave *os.File, err error) {
+	master, err = os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open ptmx: %w", err)
+	}
+	if err := unix.IoctlSetPointerInt(int(master.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("unlock pty: %w", err)
+	}
+	n, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("pty number: %w", err)
+	}
+	slave, err = os.OpenFile("/dev/pts/"+strconv.Itoa(n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("open pts %d: %w", n, err)
+	}
+	return master, slave, nil
+}
+
 // currentUsername is the OS user the TUI runs as, for openvpn's
 // --management-client-user — so the root openvpn lets this (unprivileged) user
 // connect to its management socket. Empty if it can't be determined.
@@ -230,32 +262,92 @@ func mgmtSocketPath() (string, error) {
 	return name, nil
 }
 
+// Management socket timeouts. The dial bounds connecting to a possibly-stale
+// socket; the I/O deadline bounds a read/write (including signalQuit's drain) so
+// a wedged openvpn can't hang the UI goroutine these run on.
+const (
+	mgmtDialTimeout = time.Second
+	mgmtIOTimeout   = 2 * time.Second
+)
+
+// StateConnected is openvpn's management state for an established tunnel — the
+// value QueryState returns when the tunnel is up.
+const StateConnected = "CONNECTED"
+
+// dialMgmt connects to openvpn's management unix socket, sets an I/O deadline,
+// and writes one command line (e.g. "state", "signal SIGTERM"). It returns the
+// open connection for the caller to read/drain and close. nil + error if the
+// socket is gone or unwritable.
+func dialMgmt(sock, cmd string) (net.Conn, error) {
+	c, err := net.DialTimeout("unix", sock, mgmtDialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	_ = c.SetDeadline(time.Now().Add(mgmtIOTimeout))
+	// Line-based protocol: openvpn sends a banner on connect but acts on a command
+	// without us reading it.
+	if _, err := c.Write([]byte(cmd + "\n")); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
 // signalQuit asks openvpn to terminate itself over its management socket. The
 // TUI is unprivileged and openvpn runs as root (pkexec), so a direct kill(2) is
 // EPERM — this is the real teardown path. Best-effort and bounded: a dial error
 // just means openvpn is already gone or never opened the socket (the Kill
-// fallback in stop covers a non-pkexec/test process).
-//
-// Runs on the UI goroutine via stop; the 1s timeouts bound any hang on a stale
-// socket. Move to a tea.Cmd if that ever bites.
+// fallback in stop covers a non-pkexec/test process). Runs on the UI goroutine
+// via stop.
 func signalQuit(sock string) {
-	c, err := net.DialTimeout("unix", sock, time.Second)
+	c, err := dialMgmt(sock, "signal SIGTERM")
 	if err != nil {
 		return
 	}
 	defer c.Close()
-	// Line-based protocol: openvpn sends a banner on connect, but acts on commands
-	// without us reading it. "signal SIGTERM" makes it exit its event loop.
-	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := c.Write([]byte("signal SIGTERM\n")); err != nil {
-		return
-	}
 	// Block until openvpn acts: it replies, then exits, closing the socket (read →
 	// EOF). Draining makes teardown deterministic — stop returns only once openvpn
 	// is actually gone — instead of racing our own Close against the caller's next
-	// step (a switch's new process, or the program quitting). Bounded by the
-	// deadline so a wedged openvpn can't hang the UI goroutine.
+	// step (a switch's new process, or the program quitting).
 	_, _ = io.Copy(io.Discard, c)
+}
+
+// MgmtSock returns the active connection's management socket path, or "" if
+// nothing is connected. The UI polls QueryState on it to detect tunnel-up.
+func (m *Manager) MgmtSock() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mgmtSock
+}
+
+// QueryState asks openvpn's management socket for its current connection state
+// (CONNECTED, CONNECTING, RECONNECTING, EXITING, …) and returns the state name,
+// or "" on any error. This is the authoritative tunnel-up signal: unlike
+// scraping the log for "Initialization Sequence Completed", it works regardless
+// of the config's verb/mute, which can suppress that line entirely.
+func QueryState(sock string) string {
+	c, err := dialMgmt(sock, "state")
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	var state string
+	sc := bufio.NewScanner(c)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "END" {
+			break
+		}
+		if strings.HasPrefix(line, ">") {
+			continue // async notifications: >INFO: banner, >STATE:, etc.
+		}
+		// state row: <unixtime>,<STATE>,<desc>,<localip>,<remoteip>,...
+		// openvpn lists history oldest-first, so the last row is the current state.
+		if f := strings.Split(line, ","); len(f) >= 2 && f[1] != "" {
+			state = f[1]
+		}
+	}
+	return state
 }
 
 // Connect starts openvpn via pkexec (prompts the user for root) and returns a
@@ -297,25 +389,27 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	}
 
 	cmd := execCommand("pkexec", args...)
-	pr, pw, err := os.Pipe()
+	// A pty (not a plain pipe) so openvpn line-buffers — see openPTY. We read its
+	// combined stdout+stderr off the master end.
+	master, slave, err := openPTY()
 	if err != nil {
 		if credsPath != "" {
 			os.Remove(credsPath)
 		}
-		return nil, fmt.Errorf("create pipe: %w", err)
+		return nil, fmt.Errorf("create pty: %w", err)
 	}
-	cmd.Stdout = pw
-	cmd.Stderr = pw
+	cmd.Stdout = slave
+	cmd.Stderr = slave
 
 	if err := cmd.Start(); err != nil {
-		pr.Close()
-		pw.Close()
+		master.Close()
+		slave.Close()
 		if credsPath != "" {
 			os.Remove(credsPath)
 		}
 		return nil, fmt.Errorf("start openvpn: %w", err)
 	}
-	pw.Close() // the child kept its own copy of the fd
+	slave.Close() // the child kept its own copy of the fd
 
 	logs := make(chan string, logBufferLines)
 	done := make(chan struct{})
@@ -334,8 +428,11 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 			defer os.Remove(mgmtSock) // openvpn unlinks it on a clean exit; tidy up otherwise
 		}
 		defer cmd.Wait() // reaper: runs on process exit (its own or via Kill)
-		defer pr.Close()
-		sc := bufio.NewScanner(pr)
+		defer master.Close()
+		// On child exit the pty master read returns EIO, not a clean EOF; the
+		// scanner stops either way and we don't inspect sc.Err(), so it reads as a
+		// normal end-of-stream (same as the old pipe's EOF).
+		sc := bufio.NewScanner(master)
 		for sc.Scan() {
 			select {
 			case logs <- sc.Text():

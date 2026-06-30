@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Quitting (`q` / `ctrl+c`) while a connection is active now asks for
+  confirmation before tearing the tunnel down, so an accidental keypress no
+  longer drops a live VPN. With nothing connected it quits immediately.
+
 ### Fixed
 
 - Disconnecting (and quitting) now actually tears the tunnel down. openvpn runs
@@ -17,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`--management … unix --management-client-user`) and asks openvpn to terminate
   itself (`signal SIGTERM`) on teardown; a `defer` in the launcher guarantees
   this on every exit path, including ctrl+c.
+- The status badge no longer hangs on `connecting…` after a tunnel is actually
+  up. Tunnel-up is now detected from openvpn's **management state**
+  (`CONNECTED`), polled on the management socket, instead of scraping the log for
+  the `Initialization Sequence Completed` line — a low-`verb`/`mute` config can
+  suppress that line entirely, leaving the badge stuck forever despite a working
+  connection. The management state is authoritative regardless of log verbosity.
+- The log pane now streams in real time. openvpn is given a pseudo-terminal
+  instead of a plain pipe, so it line-buffers its output (over a pipe it
+  block-buffers in ~4KB chunks, so lines arrived late and bunched up).
 
 ## [0.5.0] - 2026-06-29
 

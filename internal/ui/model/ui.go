@@ -30,6 +30,18 @@ const (
 // reconnectMsg fires reconnectDelay after a drop to redial the connection.
 type reconnectMsg struct{}
 
+// statePollInterval is how often the UI polls openvpn's management state to
+// detect tunnel-up while a connection is coming up.
+const statePollInterval = 1 * time.Second
+
+// statePollMsg ticks the management-state poll; stateResultMsg carries the state
+// name a poll read (tagged with its socket so a poll from a previous connection
+// can't flip the badge for the current one — the stale-channel guard, by socket).
+type (
+	statePollMsg   struct{}
+	stateResultMsg struct{ sock, state string }
+)
+
 // sidebarWidth is the sidebar pane's outer width, in columns; the log pane
 // takes the rest of the terminal width.
 const sidebarWidth = 42
@@ -140,11 +152,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Ch != m.logCh {
 			return m, nil // log from an old connection
 		}
+		// Display only: a log line never changes connection state — tunnel-up is
+		// detected by the management-state poll (stateResultMsg), not log content.
 		m.log.AppendLog(msg.Line)
-		if m.log.State() == StateConnected && m.connectedAt.IsZero() {
-			m.connectedAt = time.Now() // tunnel-up: start the stability clock
-		}
-		m.syncConnected() // tunnel-up flips the sidebar marker green
 		return m, utils.WaitForLog(m.logCh)
 
 	case utils.LogClosedMsg:
@@ -152,6 +162,34 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleDrop()
 		}
 		return m, nil
+
+	case statePollMsg:
+		// Poll only while a connection is coming up; stop once it is connected,
+		// gone, or settled. The dial runs off the UI goroutine in the returned cmd.
+		if m.logCh == nil || m.log.State() != StateConnecting {
+			return m, nil
+		}
+		sock := m.mgr.MgmtSock()
+		if sock == "" {
+			return m, m.pollStateTick() // openvpn hasn't opened the socket yet
+		}
+		return m, func() tea.Msg { return stateResultMsg{sock: sock, state: vpn.QueryState(sock)} }
+
+	case stateResultMsg:
+		// Drop a result from a previous connection (switch/reconnect) — the socket
+		// identifies it, like the log stream's stale-channel guard.
+		if msg.sock != m.mgr.MgmtSock() || m.logCh == nil || m.log.State() != StateConnecting {
+			return m, nil
+		}
+		if msg.state == vpn.StateConnected {
+			m.log.MarkConnected()
+			if m.connectedAt.IsZero() {
+				m.connectedAt = time.Now() // tunnel-up: start the stability clock
+			}
+			m.syncConnected()
+			return m, nil // done polling
+		}
+		return m, m.pollStateTick() // still coming up — poll again
 
 	case reconnectMsg:
 		// Redial only if still waiting (not cancelled) and nothing else has
@@ -207,7 +245,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// no-op — nothing to disconnect.
 			if m.logCh != nil {
 				m.confirm = dialog.NewConfirm("disconnect",
-					"Disconnect from\n\""+m.log.ActiveName()+"\"?", m.disconnect)
+					"Disconnect from\n\""+m.log.ActiveName()+"\"?",
+					func() tea.Cmd { m.disconnect(); return nil })
 				m.mode = modeConfirm
 			} else if m.log.State() == StateReconnecting {
 				// Cancel a pending auto-reconnect (no tunnel yet, so no confirm).
@@ -225,7 +264,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					name := cfg.Name
 					m.confirm = dialog.NewConfirm("forget credentials",
 						"Forget saved credentials for\n\""+name+"\"?",
-						func() { _ = vpn.ForgetCreds(name) })
+						func() tea.Cmd { _ = vpn.ForgetCreds(name); return nil })
 					m.mode = modeConfirm
 				}
 			}
@@ -284,8 +323,9 @@ func (m *UI) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "y", "enter":
-		m.confirm.Yes()
+		cmd := m.confirm.Yes()
 		m.mode = modeNormal
+		return m, cmd
 	case "n", "esc":
 		m.mode = modeNormal
 	}
@@ -319,15 +359,26 @@ func (m *UI) disconnect() {
 	m.syncConnected()
 }
 
-// quit tears the tunnel down and ends the program. Disarming auto-reconnect and
-// nulling logCh first is what stops a quit from leaving the (root) openvpn
-// running: without the disarm a late drop could reschedule a redial, and the
+// quit ends the program. With a live connection it confirms first — q/ctrl+c are
+// easy to fat-finger and quitting tears the tunnel down. The teardown runs on
+// accept: disarm auto-reconnect and signal openvpn to stop. Disarming and
+// nulling logCh first is what stops the quit from leaving the (root) openvpn
+// running — without the disarm a late drop could reschedule a redial, and the
 // nulled logCh makes the stale-channel guard drop any in-flight LogClosedMsg.
 func (m *UI) quit() (tea.Model, tea.Cmd) {
-	m.disarmReconnect()
-	_ = m.mgr.Disconnect()
-	m.logCh = nil
-	return m, tea.Quit
+	if m.logCh == nil {
+		return m, tea.Quit // nothing connected — just go
+	}
+	m.confirm = dialog.NewConfirm("quit",
+		"\""+m.log.ActiveName()+"\" is still active.\nDisconnect and quit?",
+		func() tea.Cmd {
+			m.disarmReconnect()
+			_ = m.mgr.Disconnect()
+			m.logCh = nil
+			return tea.Quit
+		})
+	m.mode = modeConfirm
+	return m, nil
 }
 
 // handleDrop reacts to the live process exiting on its own (the only LogClosedMsg
@@ -423,7 +474,14 @@ func (m *UI) connect(cfg vpn.Config, username, password string) (tea.Model, tea.
 	m.armReconnect(cfg)
 	m.log.StartConnection(cfg.Name)
 	m.syncConnected() // a fresh connect clears any previous green marker
-	return m, utils.WaitForLog(ch)
+	// Pump the log for display and poll the management state for tunnel-up.
+	return m, tea.Batch(utils.WaitForLog(ch), m.pollStateTick())
+}
+
+// pollStateTick schedules the next management-state poll. Polling runs while the
+// connection is coming up and stops once it reaches connected (see statePollMsg).
+func (m *UI) pollStateTick() tea.Cmd {
+	return tea.Tick(statePollInterval, func(time.Time) tea.Msg { return statePollMsg{} })
 }
 
 // redialCreds resolves the credentials to reconnect cfg with WITHOUT retaining

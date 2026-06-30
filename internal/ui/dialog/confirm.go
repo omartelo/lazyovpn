@@ -4,29 +4,35 @@
 // the UI's job. Modelled on crush's internal/ui/dialog package.
 package dialog
 
-import "github.com/omartelo/lazyovpn/internal/ui/common"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/omartelo/lazyovpn/internal/ui/common"
+)
 
 // confirmWidth is the inner width of a confirm popup; the height auto-fits.
 const confirmWidth = 54
 
 // Confirm is a yes/no overlay: a title, a message, and the action to run when
-// the user accepts. The UI builds one, routes y/n to it, and renders it.
+// the user accepts. The UI builds one, routes y/n to it, and renders it. onYes
+// returns a tea.Cmd so an accepted action can have an effect (e.g. quitting).
 type Confirm struct {
 	title   string
 	message string
-	onYes   func()
+	onYes   func() tea.Cmd
 }
 
 // NewConfirm builds a confirm popup that runs onYes when accepted.
-func NewConfirm(title, message string, onYes func()) Confirm {
+func NewConfirm(title, message string, onYes func() tea.Cmd) Confirm {
 	return Confirm{title: title, message: message, onYes: onYes}
 }
 
-// Yes runs the confirm action (a no-op if none was set).
-func (c Confirm) Yes() {
+// Yes runs the confirm action and returns its command (nil if none was set).
+func (c Confirm) Yes() tea.Cmd {
 	if c.onYes != nil {
-		c.onYes()
+		return c.onYes()
 	}
+	return nil
 }
 
 // View renders the popup box. The UI centers it over the main view.
