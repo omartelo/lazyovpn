@@ -658,6 +658,30 @@ func TestStateResultReschedulesWhileConnecting(t *testing.T) {
 	}
 }
 
+// A poll tick while connecting keeps polling even when the socket isn't open yet
+// (MgmtSock is "" here): it must reschedule, not give up.
+func TestStatePollReschedulesWhileConnecting(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	_, cmd := m.Update(statePollMsg{})
+	if cmd == nil {
+		t.Error("poll tick while connecting returned no cmd — polling stopped early")
+	}
+}
+
+// A poll tick stops (no cmd) once nothing is coming up — no busy-loop after the
+// connection settles.
+func TestStatePollStopsWhenNotConnecting(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI) // state Idle, logCh nil
+
+	_, cmd := m.Update(statePollMsg{})
+	if cmd != nil {
+		t.Error("poll tick with no live connection returned a cmd — should stop")
+	}
+}
+
 // writeTempConfig writes a throwaway .ovpn and returns its Config (Name = name).
 func writeTempConfig(t *testing.T, name, body string) vpn.Config {
 	t.Helper()

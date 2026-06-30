@@ -152,11 +152,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Ch != m.logCh {
 			return m, nil // log from an old connection
 		}
+		// Display only: a log line never changes connection state — tunnel-up is
+		// detected by the management-state poll (stateResultMsg), not log content.
 		m.log.AppendLog(msg.Line)
-		if m.log.State() == StateConnected && m.connectedAt.IsZero() {
-			m.connectedAt = time.Now() // tunnel-up: start the stability clock
-		}
-		m.syncConnected() // tunnel-up flips the sidebar marker green
 		return m, utils.WaitForLog(m.logCh)
 
 	case utils.LogClosedMsg:
@@ -183,7 +181,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.sock != m.mgr.MgmtSock() || m.logCh == nil || m.log.State() != StateConnecting {
 			return m, nil
 		}
-		if msg.state == "CONNECTED" {
+		if msg.state == vpn.StateConnected {
 			m.log.MarkConnected()
 			if m.connectedAt.IsZero() {
 				m.connectedAt = time.Now() // tunnel-up: start the stability clock

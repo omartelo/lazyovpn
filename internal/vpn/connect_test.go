@@ -102,8 +102,9 @@ func TestHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-// connectedMarker mirrors the UI's tunnel-up sentinel; the helper emits it so the
-// stream test reads a realistic openvpn line. Kept here to avoid importing model.
+// connectedMarker is just a realistic openvpn log line for the stream test — the
+// UI no longer scrapes it (tunnel-up comes from the management state); it remains
+// only as representative output the fake "openvpn" emits.
 const connectedMarker = "Initialization Sequence Completed"
 
 // drain reads every line until the channel closes (proving the reaper closed it)
@@ -411,6 +412,32 @@ func TestQueryStateReturnsCurrent(t *testing.T) {
 func TestQueryStateNoListener(t *testing.T) {
 	if got := QueryState(filepath.Join(t.TempDir(), "nope.sock")); got != "" {
 		t.Errorf("QueryState on a dead socket = %q, want empty", got)
+	}
+}
+
+// A latest state that is not CONNECTED is returned verbatim — QueryState must not
+// report a false tunnel-up (the whole point of replacing log scraping).
+func TestQueryStateNotConnected(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		fmt.Fprint(c, ">INFO:OpenVPN Management Interface Version 5\r\n")
+		bufio.NewReader(c).ReadString('\n') // the "state" request
+		fmt.Fprint(c, "1700000000,RECONNECTING,ping-restart,,,\r\nEND\r\n")
+	}()
+
+	if got := QueryState(sock); got != "RECONNECTING" {
+		t.Errorf("QueryState = %q, want RECONNECTING (not a false CONNECTED)", got)
 	}
 }
 

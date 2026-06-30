@@ -262,31 +262,53 @@ func mgmtSocketPath() (string, error) {
 	return name, nil
 }
 
+// Management socket timeouts. The dial bounds connecting to a possibly-stale
+// socket; the I/O deadline bounds a read/write (including signalQuit's drain) so
+// a wedged openvpn can't hang the UI goroutine these run on.
+const (
+	mgmtDialTimeout = time.Second
+	mgmtIOTimeout   = 2 * time.Second
+)
+
+// StateConnected is openvpn's management state for an established tunnel — the
+// value QueryState returns when the tunnel is up.
+const StateConnected = "CONNECTED"
+
+// dialMgmt connects to openvpn's management unix socket, sets an I/O deadline,
+// and writes one command line (e.g. "state", "signal SIGTERM"). It returns the
+// open connection for the caller to read/drain and close. nil + error if the
+// socket is gone or unwritable.
+func dialMgmt(sock, cmd string) (net.Conn, error) {
+	c, err := net.DialTimeout("unix", sock, mgmtDialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	_ = c.SetDeadline(time.Now().Add(mgmtIOTimeout))
+	// Line-based protocol: openvpn sends a banner on connect but acts on a command
+	// without us reading it.
+	if _, err := c.Write([]byte(cmd + "\n")); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
 // signalQuit asks openvpn to terminate itself over its management socket. The
 // TUI is unprivileged and openvpn runs as root (pkexec), so a direct kill(2) is
 // EPERM — this is the real teardown path. Best-effort and bounded: a dial error
 // just means openvpn is already gone or never opened the socket (the Kill
-// fallback in stop covers a non-pkexec/test process).
-//
-// Runs on the UI goroutine via stop; the 1s timeouts bound any hang on a stale
-// socket. Move to a tea.Cmd if that ever bites.
+// fallback in stop covers a non-pkexec/test process). Runs on the UI goroutine
+// via stop.
 func signalQuit(sock string) {
-	c, err := net.DialTimeout("unix", sock, time.Second)
+	c, err := dialMgmt(sock, "signal SIGTERM")
 	if err != nil {
 		return
 	}
 	defer c.Close()
-	// Line-based protocol: openvpn sends a banner on connect, but acts on commands
-	// without us reading it. "signal SIGTERM" makes it exit its event loop.
-	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := c.Write([]byte("signal SIGTERM\n")); err != nil {
-		return
-	}
 	// Block until openvpn acts: it replies, then exits, closing the socket (read →
 	// EOF). Draining makes teardown deterministic — stop returns only once openvpn
 	// is actually gone — instead of racing our own Close against the caller's next
-	// step (a switch's new process, or the program quitting). Bounded by the
-	// deadline so a wedged openvpn can't hang the UI goroutine.
+	// step (a switch's new process, or the program quitting).
 	_, _ = io.Copy(io.Discard, c)
 }
 
@@ -304,15 +326,11 @@ func (m *Manager) MgmtSock() string {
 // scraping the log for "Initialization Sequence Completed", it works regardless
 // of the config's verb/mute, which can suppress that line entirely.
 func QueryState(sock string) string {
-	c, err := net.DialTimeout("unix", sock, time.Second)
+	c, err := dialMgmt(sock, "state")
 	if err != nil {
 		return ""
 	}
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(time.Second))
-	if _, err := c.Write([]byte("state\n")); err != nil {
-		return ""
-	}
 	var state string
 	sc := bufio.NewScanner(c)
 	for sc.Scan() {
