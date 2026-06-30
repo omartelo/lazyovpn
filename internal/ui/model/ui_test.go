@@ -534,6 +534,25 @@ func TestDisconnectDisarmsReconnect(t *testing.T) {
 	}
 }
 
+// Quitting must disarm auto-reconnect and clear logCh too — otherwise a drop in
+// flight as the program exits could reschedule a redial, respawning the (root)
+// openvpn the user just asked to quit. It also returns tea.Quit.
+func TestQuitDisarmsReconnect(t *testing.T) {
+	m, _ := armedConnected(t, "alpha")
+
+	out, cmd := m.quit()
+	mm := out.(*UI)
+	if mm.reArmed {
+		t.Error("reArmed still set after quit — a late drop could respawn openvpn")
+	}
+	if mm.logCh != nil {
+		t.Error("logCh not cleared after quit")
+	}
+	if cmd == nil {
+		t.Error("quit returned no command, expected tea.Quit")
+	}
+}
+
 // writeTempConfig writes a throwaway .ovpn and returns its Config (Name = name).
 func writeTempConfig(t *testing.T, name, body string) vpn.Config {
 	t.Helper()

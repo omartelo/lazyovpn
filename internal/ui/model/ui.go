@@ -192,8 +192,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "q", "ctrl+c":
-			_ = m.mgr.Disconnect()
-			return m, tea.Quit
+			return m.quit()
 		case "a":
 			m.mode = modeAdd
 			return m, m.picker.Open()
@@ -303,8 +302,7 @@ func (m *UI) updateLogNav(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = focusSidebar
 			return m, nil
 		case "q", "ctrl+c":
-			_ = m.mgr.Disconnect()
-			return m, tea.Quit
+			return m.quit()
 		}
 	}
 	return m, m.log.Scroll(msg)
@@ -319,6 +317,17 @@ func (m *UI) disconnect() {
 	m.log.MarkDisconnected()
 	m.logCh = nil
 	m.syncConnected()
+}
+
+// quit tears the tunnel down and ends the program. Disarming auto-reconnect and
+// nulling logCh first is what stops a quit from leaving the (root) openvpn
+// running: without the disarm a late drop could reschedule a redial, and the
+// nulled logCh makes the stale-channel guard drop any in-flight LogClosedMsg.
+func (m *UI) quit() (tea.Model, tea.Cmd) {
+	m.disarmReconnect()
+	_ = m.mgr.Disconnect()
+	m.logCh = nil
+	return m, tea.Quit
 }
 
 // handleDrop reacts to the live process exiting on its own (the only LogClosedMsg

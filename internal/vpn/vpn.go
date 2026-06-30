@@ -4,11 +4,15 @@ package vpn
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/omartelo/lazyovpn/internal/files"
 )
@@ -47,9 +51,10 @@ var execCommand = exec.Command
 //
 // Single global connection. Make it map[name]*exec.Cmd if multi-connection matters.
 type Manager struct {
-	mu     sync.Mutex
-	active *exec.Cmd
-	done   chan struct{} // closed when the current connection is torn down
+	mu       sync.Mutex
+	active   *exec.Cmd
+	done     chan struct{} // closed when the current connection is torn down
+	mgmtSock string        // openvpn's management socket — how we tell it to quit
 }
 
 func NewManager() *Manager { return &Manager{} }
@@ -195,6 +200,64 @@ func writeCredsFile(username, password string) (string, error) {
 	return f.Name(), nil
 }
 
+// currentUsername is the OS user the TUI runs as, for openvpn's
+// --management-client-user — so the root openvpn lets this (unprivileged) user
+// connect to its management socket. Empty if it can't be determined.
+func currentUsername() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}
+
+// mgmtSocketPath reserves a unique, not-yet-existing path in the user's runtime
+// dir for openvpn's management unix socket. CreateTemp gives a collision-free
+// name; we remove the file so openvpn (root) can bind a socket there.
+func mgmtSocketPath() (string, error) {
+	dir := os.Getenv("XDG_RUNTIME_DIR") // tmpfs, user-owned (/run/user/UID)
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	f, err := os.CreateTemp(dir, "lazyovpn-mgmt-*")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	f.Close()
+	if err := os.Remove(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// signalQuit asks openvpn to terminate itself over its management socket. The
+// TUI is unprivileged and openvpn runs as root (pkexec), so a direct kill(2) is
+// EPERM — this is the real teardown path. Best-effort and bounded: a dial error
+// just means openvpn is already gone or never opened the socket (the Kill
+// fallback in stop covers a non-pkexec/test process).
+//
+// Runs on the UI goroutine via stop; the 1s timeouts bound any hang on a stale
+// socket. Move to a tea.Cmd if that ever bites.
+func signalQuit(sock string) {
+	c, err := net.DialTimeout("unix", sock, time.Second)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	// Line-based protocol: openvpn sends a banner on connect, but acts on commands
+	// without us reading it. "signal SIGTERM" makes it exit its event loop.
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Write([]byte("signal SIGTERM\n")); err != nil {
+		return
+	}
+	// Block until openvpn acts: it replies, then exits, closing the socket (read →
+	// EOF). Draining makes teardown deterministic — stop returns only once openvpn
+	// is actually gone — instead of racing our own Close against the caller's next
+	// step (a switch's new process, or the program quitting). Bounded by the
+	// deadline so a wedged openvpn can't hang the UI goroutine.
+	_, _ = io.Copy(io.Discard, c)
+}
+
 // Connect starts openvpn via pkexec (prompts the user for root) and returns a
 // channel of stdout+stderr lines. The channel closes when openvpn exits.
 // Any previous connection is killed first.
@@ -210,6 +273,19 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	m.stop()
 
 	args := []string{"openvpn", "--config", c.Path}
+
+	// Management socket: the only way the unprivileged TUI can stop a root
+	// openvpn (signalQuit) — kill(2) on it is EPERM. Best-effort: if we can't
+	// resolve the OS user the socket would be unreachable, so skip it and accept
+	// the teardown ceiling rather than open a socket we can't talk to.
+	var mgmtSock string
+	if osUser := currentUsername(); osUser != "" {
+		if sock, err := mgmtSocketPath(); err == nil {
+			mgmtSock = sock
+			args = append(args, "--management", sock, "unix", "--management-client-user", osUser)
+		}
+	}
+
 	var credsPath string
 	if username != "" || password != "" {
 		p, err := writeCredsFile(username, password)
@@ -245,6 +321,7 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	done := make(chan struct{})
 	m.active = cmd
 	m.done = done
+	m.mgmtSock = mgmtSock
 
 	// Switching connections tears down the previous one async — brief overlap of two
 	// openvpn processes. Add synchronous teardown if they fight over routes.
@@ -252,6 +329,9 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 		defer close(logs)
 		if credsPath != "" {
 			defer os.Remove(credsPath) // creds gone when the connection ends
+		}
+		if mgmtSock != "" {
+			defer os.Remove(mgmtSock) // openvpn unlinks it on a clean exit; tidy up otherwise
 		}
 		defer cmd.Wait() // reaper: runs on process exit (its own or via Kill)
 		defer pr.Close()
@@ -282,7 +362,11 @@ func (m *Manager) stop() {
 		return
 	}
 	close(m.done)
-	_ = m.active.Process.Kill()
+	if m.mgmtSock != "" {
+		signalQuit(m.mgmtSock) // root openvpn terminates itself; kill(2) below would EPERM
+	}
+	_ = m.active.Process.Kill() // fallback: reaps a non-pkexec/test process
 	m.active = nil
 	m.done = nil
+	m.mgmtSock = ""
 }

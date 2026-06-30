@@ -1,6 +1,9 @@
 package vpn
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +55,23 @@ func TestHelperProcess(t *testing.T) {
 	// Always report the creds-file path first (empty when none was passed) so
 	// every test can assert whether Connect wrote one.
 	os.Stdout.WriteString("CREDPATH " + credPath + "\n")
+
+	// Report the management socket + client-user so tests can assert Connect
+	// wired the teardown channel (signalQuit's target).
+	mgmtPath, mgmtUser := "", ""
+	for i, a := range args {
+		switch a {
+		case "--management":
+			if i+1 < len(args) {
+				mgmtPath = args[i+1]
+			}
+		case "--management-client-user":
+			if i+1 < len(args) {
+				mgmtUser = args[i+1]
+			}
+		}
+	}
+	os.Stdout.WriteString("MGMT " + mgmtPath + " " + mgmtUser + "\n")
 
 	switch os.Getenv("HELPER_MODE") {
 	case "echo":
@@ -112,6 +132,9 @@ func TestConnectStreamsThenCloses(t *testing.T) {
 			if path != "" {
 				t.Errorf("no-auth connect passed --auth-user-pass %q, want none", path)
 			}
+			continue
+		}
+		if strings.HasPrefix(ln, "MGMT ") {
 			continue
 		}
 		lines = append(lines, ln)
@@ -231,6 +254,88 @@ func TestConnectWriteCredsError(t *testing.T) {
 
 	if _, err := NewManager().Connect(cfg, "alice", "s3cret"); err == nil {
 		t.Fatal("Connect: want error when the creds file cannot be written, got nil")
+	}
+}
+
+// Connect must wire openvpn's management unix socket and restrict it to the
+// current OS user — that socket is the only way the unprivileged TUI can stop a
+// root openvpn (signalQuit). Without these flags disconnect/quit leak the
+// process (a plain kill is EPERM on a pkexec'd root process).
+func TestConnectPassesManagementSocket(t *testing.T) {
+	swap(t, fakeExec("echo"))
+	cfg := writeConfig(t, "client\n")
+
+	ch, err := NewManager().Connect(cfg, "", "")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	var sock, who string
+	for _, ln := range drain(t, ch) {
+		if rest := strings.TrimPrefix(ln, "MGMT "); rest != ln {
+			parts := strings.SplitN(rest, " ", 2)
+			sock = parts[0]
+			if len(parts) > 1 {
+				who = parts[1]
+			}
+		}
+	}
+	if sock == "" {
+		t.Error("Connect did not pass --management <socket> unix")
+	}
+	if want := currentUsername(); who != want {
+		t.Errorf("--management-client-user = %q, want %q", who, want)
+	}
+}
+
+// signalQuit must send the exact line that makes openvpn exit. This is the real
+// teardown for a root openvpn the TUI can't kill directly; it must not block on
+// the management banner openvpn sends first.
+func TestSignalQuitSendsSIGTERM(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			got <- "ACCEPT ERR: " + err.Error()
+			return
+		}
+		defer c.Close()
+		// openvpn greets first; emit a banner to prove signalQuit doesn't wait for it.
+		fmt.Fprintln(c, ">INFO:OpenVPN Management Interface Version 5")
+		line, _ := bufio.NewReader(c).ReadString('\n')
+		got <- strings.TrimSpace(line)
+	}()
+
+	signalQuit(sock)
+
+	select {
+	case line := <-got:
+		if line != "signal SIGTERM" {
+			t.Errorf("management received %q, want %q", line, "signal SIGTERM")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("signalQuit sent nothing to the management socket")
+	}
+}
+
+// signalQuit on a dead socket must return promptly, not hang the UI goroutine.
+func TestSignalQuitNoListener(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		signalQuit(filepath.Join(t.TempDir(), "nope.sock")) // nothing listening
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("signalQuit blocked on a dead socket")
 	}
 }
 
