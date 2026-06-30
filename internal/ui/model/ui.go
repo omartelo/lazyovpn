@@ -247,7 +247,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// no-op — nothing to disconnect.
 			if m.logCh != nil {
 				m.confirm = dialog.NewConfirm("disconnect",
-					"Disconnect from\n\""+m.log.ActiveName()+"\"?", m.disconnect)
+					"Disconnect from\n\""+m.log.ActiveName()+"\"?",
+					func() tea.Cmd { m.disconnect(); return nil })
 				m.mode = modeConfirm
 			} else if m.log.State() == StateReconnecting {
 				// Cancel a pending auto-reconnect (no tunnel yet, so no confirm).
@@ -265,7 +266,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					name := cfg.Name
 					m.confirm = dialog.NewConfirm("forget credentials",
 						"Forget saved credentials for\n\""+name+"\"?",
-						func() { _ = vpn.ForgetCreds(name) })
+						func() tea.Cmd { _ = vpn.ForgetCreds(name); return nil })
 					m.mode = modeConfirm
 				}
 			}
@@ -324,8 +325,9 @@ func (m *UI) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "y", "enter":
-		m.confirm.Yes()
+		cmd := m.confirm.Yes()
 		m.mode = modeNormal
+		return m, cmd
 	case "n", "esc":
 		m.mode = modeNormal
 	}
@@ -359,15 +361,26 @@ func (m *UI) disconnect() {
 	m.syncConnected()
 }
 
-// quit tears the tunnel down and ends the program. Disarming auto-reconnect and
-// nulling logCh first is what stops a quit from leaving the (root) openvpn
-// running: without the disarm a late drop could reschedule a redial, and the
+// quit ends the program. With a live connection it confirms first — q/ctrl+c are
+// easy to fat-finger and quitting tears the tunnel down. The teardown runs on
+// accept: disarm auto-reconnect and signal openvpn to stop. Disarming and
+// nulling logCh first is what stops the quit from leaving the (root) openvpn
+// running — without the disarm a late drop could reschedule a redial, and the
 // nulled logCh makes the stale-channel guard drop any in-flight LogClosedMsg.
 func (m *UI) quit() (tea.Model, tea.Cmd) {
-	m.disarmReconnect()
-	_ = m.mgr.Disconnect()
-	m.logCh = nil
-	return m, tea.Quit
+	if m.logCh == nil {
+		return m, tea.Quit // nothing connected — just go
+	}
+	m.confirm = dialog.NewConfirm("quit",
+		"\""+m.log.ActiveName()+"\" is still active.\nDisconnect and quit?",
+		func() tea.Cmd {
+			m.disarmReconnect()
+			_ = m.mgr.Disconnect()
+			m.logCh = nil
+			return tea.Quit
+		})
+	m.mode = modeConfirm
+	return m, nil
 }
 
 // handleDrop reacts to the live process exiting on its own (the only LogClosedMsg

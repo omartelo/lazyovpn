@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Quitting (`q` / `ctrl+c`) while a connection is active now asks for
+  confirmation before tearing the tunnel down, so an accidental keypress no
+  longer drops a live VPN. With nothing connected it quits immediately.
+
 ### Fixed
 
 - Disconnecting (and quitting) now actually tears the tunnel down. openvpn runs

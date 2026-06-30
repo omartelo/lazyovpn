@@ -534,22 +534,68 @@ func TestDisconnectDisarmsReconnect(t *testing.T) {
 	}
 }
 
-// Quitting must disarm auto-reconnect and clear logCh too — otherwise a drop in
-// flight as the program exits could reschedule a redial, respawning the (root)
-// openvpn the user just asked to quit. It also returns tea.Quit.
-func TestQuitDisarmsReconnect(t *testing.T) {
+// Quitting with a live connection confirms first (q/ctrl+c are easy to
+// fat-finger). Confirming tears down and disarms auto-reconnect — otherwise a
+// drop in flight as the program exits could reschedule a redial, respawning the
+// (root) openvpn the user just asked to quit — and returns tea.Quit.
+func TestQuitConfirmsThenTearsDown(t *testing.T) {
 	m, _ := armedConnected(t, "alpha")
 
 	out, cmd := m.quit()
 	mm := out.(*UI)
-	if mm.reArmed {
-		t.Error("reArmed still set after quit — a late drop could respawn openvpn")
+	if mm.mode != modeConfirm {
+		t.Fatalf("quit with a live connection did not confirm (mode=%v)", mm.mode)
 	}
-	if mm.logCh != nil {
-		t.Error("logCh not cleared after quit")
+	if cmd != nil {
+		t.Error("quit ran the teardown before the user confirmed")
+	}
+	if !mm.reArmed || mm.logCh == nil {
+		t.Error("quit tore the connection down before the user confirmed")
+	}
+
+	out2, cmd2 := mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	done := out2.(*UI)
+	if done.reArmed {
+		t.Error("reArmed still set after confirming quit — a late drop could respawn openvpn")
+	}
+	if done.logCh != nil {
+		t.Error("logCh not cleared after confirming quit")
+	}
+	if cmd2 == nil {
+		t.Error("confirming quit returned no command, expected tea.Quit")
+	}
+}
+
+// Cancelling the quit confirm keeps the connection and the program running.
+func TestQuitConfirmCancelKeepsConnection(t *testing.T) {
+	m, _ := armedConnected(t, "alpha")
+
+	out, _ := m.quit()
+	out, cmd := out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	kept := out.(*UI)
+	if kept.mode != modeNormal {
+		t.Errorf("mode = %v after cancel, want modeNormal", kept.mode)
+	}
+	if kept.logCh == nil {
+		t.Error("logCh cleared after cancelling quit, want the connection kept")
+	}
+	if cmd != nil {
+		t.Error("cancelling quit returned a cmd, want none")
+	}
+}
+
+// Quitting with nothing connected goes straight out — no confirm popup.
+func TestQuitNoConnectionImmediate(t *testing.T) {
+	m := New([]vpn.Config{{Name: "alpha", Path: "/x/alpha.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, cmd := m.quit()
+	if got := out.(*UI).mode; got == modeConfirm {
+		t.Error("quit asked for confirmation with no active connection")
 	}
 	if cmd == nil {
-		t.Error("quit returned no command, expected tea.Quit")
+		t.Error("quit with no connection returned no command, expected tea.Quit")
 	}
 }
 
