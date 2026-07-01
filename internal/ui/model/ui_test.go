@@ -1094,3 +1094,26 @@ func TestDeleteLiveConnectionDisconnectsAndRemoves(t *testing.T) {
 		t.Error("connection still listed after delete")
 	}
 }
+
+// A delete that fails (the file can't be removed) surfaces the error and leaves
+// the connection in the list.
+func TestDeleteFailureKeepsConnection(t *testing.T) {
+	keyring.MockInit()
+	// A path with no file on disk makes vpn.DeleteConfig's os.Remove fail.
+	ghost := filepath.Join(t.TempDir(), "ghost.ovpn")
+	m := New([]vpn.Config{{Name: "ghost", Path: ghost}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm → fails
+	mm := out.(*UI)
+
+	if _, ok := mm.sidebar.SelectedConfig(); !ok {
+		t.Error("connection removed from the list despite the delete failing")
+	}
+	if mm.log.State() != StateError {
+		t.Errorf("state = %v after a failed delete, want StateError", mm.log.State())
+	}
+}
