@@ -11,9 +11,9 @@ the pattern.
 
 - `common/` — **stateless** view primitives (`Popup`, `TitledBox`,
   `Overlay`/`Center`, the theme). Import these; add new primitives here.
-- `dialog/` — **stateful** overlay components (`Confirm`, `FilePicker`,
-  `Credentials`). Built on `common.Popup`; the UI builds, drives, and centers
-  them.
+- `dialog/` — **stateful** overlay components (`Confirm`, `Menu`, `FilePicker`,
+  `Credentials`, `Rename`). Built on `common.Popup`; the UI builds, drives, and
+  centers them.
 - `utils/` — bubbletea glue: the log-stream pump (`WaitForLog`, the
   `LogMsg`/`LogClosedMsg` messages). The file chooser now lives in
   `dialog.FilePicker`.
@@ -86,8 +86,10 @@ not its 23 KB machinery).
 - **Modes** are the overlay stack-of-one: `appMode` selects which overlay owns
   input. Yes/no popups share one `modeConfirm` backed by a reusable
   `dialog.Confirm` (built with an `onYes` closure); stateful modals (`auth`,
-  `add`) keep their own mode. A full `dialog.Overlay` stack (crush has one) is
-  overkill while only one popup shows at a time — add it when popups must stack.
+  `add`, `menu`, `rename`) keep their own mode. Overlays swap rather than stack —
+  `menu`'s `f`/`r` hand off to `modeConfirm`/`modeRename` by flipping `appMode`,
+  they do not layer. A full `dialog.Overlay` stack (crush has one) is overkill
+  while only one popup shows at a time — add it when popups must stack.
 - **Pane focus** is orthogonal to modes: a `pane` field (`focusSidebar`/
   `focusLog`) picks which panel gets navigation keys in `modeNormal` (an
   open overlay still wins). `tab` focuses the log pane so its viewport
