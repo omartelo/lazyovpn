@@ -68,6 +68,17 @@ func (s *Sidebar) AddConfig(c vpn.Config) {
 	s.configs = append(s.configs, c)
 }
 
+// RenameConfig replaces the listed config matching old.Path with updated (a
+// rename changes both name and path). No-op if it is not listed.
+func (s *Sidebar) RenameConfig(old, updated vpn.Config) {
+	for i := range s.configs {
+		if s.configs[i].Path == old.Path {
+			s.configs[i] = updated
+			return
+		}
+	}
+}
+
 // SelectedConfig returns the highlighted config.
 func (s Sidebar) SelectedConfig() (vpn.Config, bool) {
 	if s.cursor < 0 || s.cursor >= len(s.configs) {

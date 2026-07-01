@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Rename a connection from the action menu (`r`). A prompt asks for the new
+  name; on confirm, any saved credentials are migrated to the new name in the
+  keyring first (a migration failure aborts the rename untouched) and then the
+  config file is renamed. Renaming a connection that is connected (or waiting to
+  auto-reconnect) is refused — disconnect first.
+
 ### Changed
 
 - `x` now opens a per-connection action menu instead of forgetting credentials

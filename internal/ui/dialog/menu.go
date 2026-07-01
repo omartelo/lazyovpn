@@ -19,6 +19,7 @@ var menuKey = lipgloss.NewStyle().Foreground(common.Accent)
 // then label. The UI routes each key (see updateMenu) — this is display only.
 // A new per-connection action is one more row here plus a case in updateMenu.
 var menuItems = []struct{ key, label string }{
+	{"r", "rename connection"},
 	{"f", "forget saved credentials"},
 }
 

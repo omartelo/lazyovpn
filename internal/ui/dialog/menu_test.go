@@ -13,7 +13,7 @@ func TestMenuViewRendersColumns(t *testing.T) {
 	m.Open("home-vpn")
 	out := m.View()
 
-	for _, want := range []string{"home-vpn", "f", "forget saved credentials", "esc: close"} {
+	for _, want := range []string{"home-vpn", "r", "rename connection", "f", "forget saved credentials", "esc: close"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("menu view missing %q\n%s", want, out)
 		}

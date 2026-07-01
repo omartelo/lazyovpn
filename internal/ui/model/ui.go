@@ -81,6 +81,7 @@ const (
 	modeAdd             // import-connection modal is open
 	modeConfirm         // a yes/no confirm popup is up (forget creds, disconnect)
 	modeMenu            // the per-connection action menu is open
+	modeRename          // the rename-connection prompt is open
 )
 
 // pane identifies which panel receives navigation keys while no overlay is up
@@ -111,6 +112,7 @@ type UI struct {
 	creds   dialog.Credentials
 	picker  dialog.FilePicker
 	menu    dialog.Menu
+	rename  dialog.Rename
 	mode    appMode
 	focus   pane           // which pane gets nav keys in modeNormal
 	pending vpn.Config     // connection awaiting credentials
@@ -139,6 +141,7 @@ func New(configs []vpn.Config, mgr *vpn.Manager) *UI {
 	m.creds = dialog.NewCredentials()
 	m.picker = dialog.NewFilePicker("add connection")
 	m.menu = dialog.NewMenu()
+	m.rename = dialog.NewRename()
 	return m
 }
 
@@ -224,6 +227,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirm(msg)
 	case modeMenu:
 		return m.updateMenu(msg)
+	case modeRename:
+		return m.updateRename(msg)
 	}
 
 	// In normal mode the focused pane captures navigation. The log pane
@@ -339,6 +344,8 @@ func (m *UI) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch key.String() {
+	case "r":
+		return m.openRename() // swaps modeMenu → modeRename (or no-op)
 	case "f":
 		m.mode = modeNormal
 		m.forgetCreds() // may re-open as the forget-confirm popup
@@ -590,6 +597,8 @@ func (m *UI) View() tea.View {
 		body = common.Center(body, m.confirm.View())
 	case modeMenu:
 		body = common.Center(body, m.menu.View())
+	case modeRename:
+		body = common.Center(body, m.rename.View())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(m.helpFooter()))
 }

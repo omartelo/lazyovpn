@@ -833,3 +833,144 @@ func TestArmReconnectUnreadableConfig(t *testing.T) {
 		t.Error("reArmed = true for an unreadable config, want false")
 	}
 }
+
+// "r" in the menu opens the rename prompt, prefilled with the selected name.
+func TestMenuRenameOpensPrompt(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	mm := out.(*UI)
+	if mm.mode != modeRename {
+		t.Fatalf("mode = %v after menu rename, want modeRename", mm.mode)
+	}
+	if got := mm.rename.Value(); got != "vpn" {
+		t.Errorf("rename field = %q, want prefilled vpn", got)
+	}
+}
+
+// The full rename path: x → r, edit the name, enter renames the file on disk and
+// updates the sidebar entry.
+func TestRenameConfirmRenamesFileAndSidebar(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "old", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename (prefill "old")
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-2"})           // → "old-2"
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // confirm
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after rename, want modeNormal", mm.mode)
+	}
+	cfg, _ := mm.sidebar.SelectedConfig()
+	if cfg.Name != "old-2" {
+		t.Errorf("sidebar name = %q, want old-2", cfg.Name)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old-2.ovpn")); err != nil {
+		t.Errorf("renamed file missing: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("old file still present after rename")
+	}
+	// The log pane retitles to the new name (buffer remapped + shown).
+	if v := mm.log.View(false); !strings.Contains(v, "old-2") {
+		t.Errorf("log pane not refreshed to the new name:\n%s", v)
+	}
+}
+
+// A pending auto-reconnect also counts as in use: renaming that config is
+// refused (its reCfg is keyed by the old path/name).
+func TestRenameBlockedWhileReconnectArmed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conn.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vpn.Config{Name: "conn", Path: path}
+
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.reArmed = true // a redial is pending (logCh nil, no live tunnel)
+	m.reCfg = cfg
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-2"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	mm := out.(*UI)
+
+	if mm.mode != modeRename {
+		t.Errorf("mode = %v, want modeRename (blocked by pending reconnect)", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file renamed despite a pending reconnect: %v", err)
+	}
+}
+
+// Renaming a connection that is live is refused: the prompt stays open with an
+// error and the file is untouched (name-keyed state would otherwise desync).
+func TestRenameBlockedWhenConnected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "live.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "live", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection("live")
+	m.logCh = make(chan string) // simulate a live stream
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-2"})           // edit
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // confirm → blocked
+	mm := out.(*UI)
+
+	if mm.mode != modeRename {
+		t.Errorf("mode = %v, want modeRename (blocked, stays open)", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("live config file renamed despite being in use: %v", err)
+	}
+}
+
+// An invalid new name keeps the prompt open and leaves the file untouched.
+func TestRenameInvalidNameStaysOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "old", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "/evil"})        // invalid (path sep)
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // confirm → error
+	mm := out.(*UI)
+
+	if mm.mode != modeRename {
+		t.Errorf("mode = %v after invalid name, want modeRename (stays open)", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("original file gone after a refused rename: %v", err)
+	}
+}
