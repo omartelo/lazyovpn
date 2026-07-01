@@ -32,6 +32,8 @@ The TUI cannot be exercised non-interactively (needs a TTY, a real `.ovpn`, and 
 
 ```
 main.go                          cobra root cmd → discovers configs → launches the Bubble Tea program
+cmd/log.go                       `lazyovpn log` subcommand: open newest app log in $EDITOR (fallback vi)
+internal/applog/applog.go        per-run logfmt app log (slog TextHandler) under XDG state dir + prune + Latest
 internal/files/picker.go         native file-chooser (zenity/kdialog) resolution + Pick()
 internal/files/copy.go           generic Copy(src, dst, perm)
 internal/vpn/vpn.go              config discovery + import, auth detection, privileged openvpn process management

@@ -30,9 +30,10 @@ func newRootCmd(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runApp()
+			return runApp(version)
 		},
 	}
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newLogCmd())
 	return root
 }
