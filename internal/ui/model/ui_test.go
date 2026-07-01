@@ -974,3 +974,123 @@ func TestRenameInvalidNameStaysOpen(t *testing.T) {
 		t.Errorf("original file gone after a refused rename: %v", err)
 	}
 }
+
+// Menu "d" opens the delete-connection confirm.
+func TestMenuDeleteOpensConfirm(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	if got := out.(*UI).mode; got != modeConfirm {
+		t.Fatalf("mode = %v after menu delete, want modeConfirm", got)
+	}
+}
+
+// Confirming a delete removes the file, its saved creds, and the sidebar entry;
+// the cursor clamps to a remaining connection.
+func TestDeleteConfirmRemovesEverything(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "gone.ovpn")
+	keep := filepath.Join(dir, "keep.ovpn")
+	for _, p := range []string{gone, keep} {
+		if err := os.WriteFile(p, []byte("client\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := vpn.SaveCreds("gone", "u", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "gone", Path: gone}, {Name: "keep", Path: keep}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.sidebar.Move(1) // select "keep"... then back to delete "gone"
+	m.sidebar.Move(-1)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu on "gone"
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after delete, want modeNormal", mm.mode)
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Error("deleted file still present")
+	}
+	if _, _, ok, _ := vpn.LoadCreds("gone"); ok {
+		t.Error("credentials still present after delete")
+	}
+	if cfg, ok := mm.sidebar.SelectedConfig(); !ok || cfg.Name != "keep" {
+		t.Errorf("selected = %+v ok=%v, want keep", cfg, ok)
+	}
+}
+
+// Cancelling the delete confirm leaves the file, creds, and list untouched.
+func TestDeleteCancelKeeps(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keep.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := vpn.SaveCreds("keep", "u", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "keep", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})     // cancel
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Errorf("mode = %v after cancel, want modeNormal", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file removed after cancelling delete: %v", err)
+	}
+	if _, _, ok, _ := vpn.LoadCreds("keep"); !ok {
+		t.Error("credentials removed after cancelling delete")
+	}
+	if _, ok := mm.sidebar.SelectedConfig(); !ok {
+		t.Error("connection removed from the list after cancelling delete")
+	}
+}
+
+// Deleting a live connection tears the tunnel down first, then removes it.
+func TestDeleteLiveConnectionDisconnectsAndRemoves(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "live.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "live", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection("live")
+	m.logCh = make(chan string) // simulate a live stream
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm
+	mm := out.(*UI)
+
+	if mm.logCh != nil {
+		t.Error("logCh still set after deleting the live connection")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("deleted file still present")
+	}
+	if _, ok := mm.sidebar.SelectedConfig(); ok {
+		t.Error("connection still listed after delete")
+	}
+}

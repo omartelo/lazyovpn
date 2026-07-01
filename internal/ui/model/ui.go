@@ -349,6 +349,9 @@ func (m *UI) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "f":
 		m.mode = modeNormal
 		m.forgetCreds() // may re-open as the forget-confirm popup
+	case "d":
+		m.mode = modeNormal
+		m.deleteConn() // re-opens as the delete-confirm popup
 	case "esc", "x":
 		m.mode = modeNormal
 	}
@@ -371,6 +374,42 @@ func (m *UI) forgetCreds() {
 		"Forget saved credentials for\n\""+name+"\"?",
 		func() tea.Cmd { _ = vpn.ForgetCreds(name); return nil })
 	m.mode = modeConfirm
+}
+
+// deleteConn opens the delete-connection confirm for the selected connection.
+// Deleting is destructive — it removes the config file and any saved creds — so
+// it always confirms. When the connection is in use the message says the delete
+// will disconnect it first. The menu's "d" action.
+func (m *UI) deleteConn() {
+	cfg, ok := m.sidebar.SelectedConfig()
+	if !ok {
+		return
+	}
+	message := "Delete connection\n\"" + cfg.Name + "\"?\nRemoves its config file and saved credentials."
+	if m.inUse(cfg) {
+		message = "\"" + cfg.Name + "\" is active.\nDelete will disconnect it, then remove its\nconfig file and saved credentials."
+	}
+	m.confirm = dialog.NewConfirm("delete connection", message,
+		func() tea.Cmd { return m.doDelete(cfg) })
+	m.mode = modeConfirm
+}
+
+// doDelete removes the connection from disk (file + keyring) and from the UI. It
+// tears the tunnel down first when the connection is in use, since the state
+// that would otherwise dangle (live channel, reconnect config) is keyed by name.
+// A delete failure surfaces the error and leaves the connection in place.
+func (m *UI) doDelete(cfg vpn.Config) tea.Cmd {
+	if err := vpn.DeleteConfig(cfg); err != nil {
+		m.log.SetError(err.Error())
+		return nil
+	}
+	if m.inUse(cfg) {
+		m.disconnect() // stop the live tunnel / cancel a pending reconnect
+	}
+	m.sidebar.RemoveConfig(cfg)
+	m.log.DropBuffer(cfg.Name)
+	m.log.ShowBuffer(m.sidebar.SelectedName()) // show whatever is selected now (placeholder if none)
+	return nil
 }
 
 // updateLogNav handles input while the log pane is focused: esc

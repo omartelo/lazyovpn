@@ -189,6 +189,12 @@ func (l *Log) RenameBuffer(from, to string) {
 	}
 }
 
+// DropBuffer discards a connection's stored output (a delete). No-op if nothing
+// is stored for it.
+func (l *Log) DropBuffer(name string) {
+	delete(l.buffers, name)
+}
+
 // View renders the bordered panel.
 func (l Log) View(focused bool) string {
 	title := "log"

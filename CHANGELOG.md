@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyring first (a migration failure aborts the rename untouched) and then the
   config file is renamed. Renaming a connection that is connected (or waiting to
   auto-reconnect) is refused — disconnect first.
+- Delete a connection from the action menu (`d`). A confirmation popup guards
+  the action; on confirm the config file and any saved credentials are removed
+  and the connection drops off the list. Deleting a connection that is active
+  disconnects it first.
 
 ### Changed
 

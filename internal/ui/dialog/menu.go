@@ -21,6 +21,7 @@ var menuKey = lipgloss.NewStyle().Foreground(common.Accent)
 var menuItems = []struct{ key, label string }{
 	{"r", "rename connection"},
 	{"f", "forget saved credentials"},
+	{"d", "delete connection"},
 }
 
 // Menu is the per-connection action menu (opened with x). It lists the actions
