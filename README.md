@@ -18,7 +18,9 @@ A terminal UI for managing OpenVPN connections, written in Go.
 - The connected entry is marked in the sidebar.
 - Prompts for credentials on `auth-user-pass` configs — the password is masked and never written to plaintext storage. Optionally save it to the OS keyring (Secret Service / libsecret) so later connects skip the prompt.
 - Import a config through the native file chooser (`zenity` / `kdialog`); it's copied into `~/.config/lazyovpn/connections`.
+- Per-connection action menu (`x`) to rename, delete, or forget saved credentials.
 - Scrollable log pane: focus it with `tab` (or the mouse wheel) and page back through history.
+- Application log written per run under `~/.local/state/lazyovpn/logs`; open the newest with `lazyovpn log`.
 
 ## Quick Start
 
@@ -70,12 +72,20 @@ It discovers your OpenVPN configs on startup and opens the connection list. Pick
 | `enter` | connect |
 | `a` | add a connection |
 | `d` | disconnect |
-| `x` | forget saved credentials |
+| `x` | open the action menu (rename, delete, forget saved credentials) |
 | `tab` | focus the log pane to scroll (`tab`/`esc` to go back) |
 | `pgup`/`pgdn` | page the log (while focused) |
 | `q` | quit |
 
 When prompted for credentials, `ctrl+s` toggles saving them to the OS keyring.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `lazyovpn` | launch the TUI |
+| `lazyovpn log` | open the newest application log in `$EDITOR` (falls back to `vi`) |
+| `lazyovpn doctor` | check that the external programs lazyovpn needs are installed |
 
 ## License
 
