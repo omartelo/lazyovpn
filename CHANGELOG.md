@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-01
+
 ### Added
 
 - Application log file. Each run writes a logfmt log (connection lifecycle,
   errors — never credentials) under `$XDG_STATE_HOME/lazyovpn/logs` (falls back
   to `~/.local/state/lazyovpn/logs`); the ten most recent runs are kept. Open
   the newest with `lazyovpn log`, which launches `$EDITOR` (falling back to
-  `vi`).
+  `vi`). Each line is stamped with `source=file.go:line` to aid debugging.
 
 ## [0.7.0] - 2026-07-01
 
@@ -152,7 +154,8 @@ lazydocker-style.
   CI workflow running `gofmt`/`vet`/`go test -race` with coverage on every PR.
 - MIT license and README.
 
-[Unreleased]: https://github.com/omartelo/lazyovpn/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/omartelo/lazyovpn/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/omartelo/lazyovpn/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/omartelo/lazyovpn/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/omartelo/lazyovpn/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/omartelo/lazyovpn/compare/v0.4.0...v0.5.0
