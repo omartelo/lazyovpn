@@ -68,6 +68,48 @@ func TestRenameConfigMigratesCreds(t *testing.T) {
 	}
 }
 
+// The file extension is preserved across a rename (.conf stays .conf), not
+// forced to .ovpn.
+func TestRenameConfigPreservesConfExt(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.conf")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RenameConfig(Config{Name: "old", Path: path}, "new")
+	if err != nil {
+		t.Fatalf("RenameConfig: %v", err)
+	}
+	if want := filepath.Join(dir, "new.conf"); got.Path != want {
+		t.Errorf("Path = %q, want %q (extension preserved)", got.Path, want)
+	}
+}
+
+// A config that needs auth but has nothing saved just gets its file renamed:
+// migration is gated on a real keyring entry, so there is nothing to move and no
+// entry is created under the new name.
+func TestRenameConfigNeedsAuthNoSavedCreds(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.ovpn")
+	if err := os.WriteFile(path, []byte("client\nauth-user-pass\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RenameConfig(Config{Name: "old", Path: path}, "new")
+	if err != nil {
+		t.Fatalf("RenameConfig: %v", err)
+	}
+	if _, err := os.Stat(got.Path); err != nil {
+		t.Errorf("new file missing: %v", err)
+	}
+	if _, _, ok, _ := LoadCreds("new"); ok {
+		t.Error("a keyring entry was created under the new name with nothing to migrate")
+	}
+}
+
 // A rename onto an existing config name is refused, leaving both files and any
 // saved credentials untouched.
 func TestRenameConfigTargetExists(t *testing.T) {
