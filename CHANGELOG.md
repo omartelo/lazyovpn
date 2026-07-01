@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Application log file. Each run writes a logfmt log (connection lifecycle,
+  errors — never credentials) under `$XDG_STATE_HOME/lazyovpn/logs` (falls back
+  to `~/.local/state/lazyovpn/logs`); the ten most recent runs are kept. Open
+  the newest with `lazyovpn log`, which launches `$EDITOR` (falling back to
+  `vi`).
+
 ## [0.7.0] - 2026-07-01
 
 ### Added

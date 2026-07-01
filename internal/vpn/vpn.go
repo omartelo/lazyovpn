@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -364,6 +365,9 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	defer m.mu.Unlock()
 	m.stop()
 
+	// Never log username/password — only the config identity (invariant 6).
+	slog.Info("connecting", "name", c.Name, "path", c.Path, "auth", username != "" || password != "")
+
 	args := []string{"openvpn", "--config", c.Path}
 
 	// Management socket: the only way the unprivileged TUI can stop a root
@@ -407,9 +411,11 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 		if credsPath != "" {
 			os.Remove(credsPath)
 		}
+		slog.Error("start openvpn failed", "name", c.Name, "err", err)
 		return nil, fmt.Errorf("start openvpn: %w", err)
 	}
 	slave.Close() // the child kept its own copy of the fd
+	slog.Info("openvpn started", "name", c.Name, "pid", cmd.Process.Pid, "management", mgmtSock != "")
 
 	logs := make(chan string, logBufferLines)
 	done := make(chan struct{})
@@ -440,6 +446,7 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 				return
 			}
 		}
+		slog.Info("openvpn stream closed", "name", c.Name)
 	}()
 	return logs, nil
 }
@@ -458,6 +465,7 @@ func (m *Manager) stop() {
 	if m.active == nil {
 		return
 	}
+	slog.Info("stopping openvpn", "management", m.mgmtSock != "")
 	close(m.done)
 	if m.mgmtSock != "" {
 		signalQuit(m.mgmtSock) // root openvpn terminates itself; kill(2) below would EPERM
