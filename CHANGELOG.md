@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Rename a connection from the action menu (`r`). A prompt asks for the new
+  name; on confirm, any saved credentials are migrated to the new name in the
+  keyring first (a migration failure aborts the rename untouched) and then the
+  config file is renamed. Renaming a connection that is connected (or waiting to
+  auto-reconnect) is refused — disconnect first.
+- Delete a connection from the action menu (`d`). A confirmation popup guards
+  the action; on confirm the config file and any saved credentials are removed
+  and the connection drops off the list. Deleting a connection that is active
+  disconnects it first.
+
+### Changed
+
+- `x` now opens a per-connection action menu instead of forgetting credentials
+  directly. Forget saved credentials moved into the menu under `f` (it still
+  asks for confirmation). The menu is the home for upcoming per-connection
+  actions.
+
 ## [0.6.0] - 2026-06-30
 
 ### Added

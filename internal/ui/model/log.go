@@ -171,6 +171,30 @@ func (l *Log) ShowBuffer(name string) {
 	l.vp.GotoBottom()
 }
 
+// RenameBuffer moves a connection's stored output from one name to another so
+// its log history stays visible after a rename. No-op when nothing is stored.
+func (l *Log) RenameBuffer(from, to string) {
+	if from == to {
+		return
+	}
+	if b, ok := l.buffers[from]; ok {
+		l.buffers[to] = b
+		delete(l.buffers, from)
+	}
+	if l.shownName == from {
+		l.shownName = to
+	}
+	if l.activeName == from {
+		l.activeName = to
+	}
+}
+
+// DropBuffer discards a connection's stored output (a delete). No-op if nothing
+// is stored for it.
+func (l *Log) DropBuffer(name string) {
+	delete(l.buffers, name)
+}
+
 // View renders the bordered panel.
 func (l Log) View(focused bool) string {
 	title := "log"

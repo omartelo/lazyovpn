@@ -66,7 +66,7 @@ var (
 // helpKeys is the keybinding footer, lazydocker style. helpKeysLog
 // replaces it while the log pane is focused for scrolling.
 const (
-	helpKeys    = "↑/↓ j/k: navigate · enter: connect · tab: log · a: add · d: disconnect · x: forget creds · q: quit"
+	helpKeys    = "↑/↓ j/k: navigate · enter: connect · tab: log · a: add · d: disconnect · x: menu · q: quit"
 	helpKeysLog = "↑/↓ j/k: scroll · pgup/pgdn: page · tab/esc: back · q: quit"
 )
 
@@ -80,6 +80,8 @@ const (
 	modeAuth            // credential modal is capturing input
 	modeAdd             // import-connection modal is open
 	modeConfirm         // a yes/no confirm popup is up (forget creds, disconnect)
+	modeMenu            // the per-connection action menu is open
+	modeRename          // the rename-connection prompt is open
 )
 
 // pane identifies which panel receives navigation keys while no overlay is up
@@ -109,6 +111,8 @@ type UI struct {
 	log     Log
 	creds   dialog.Credentials
 	picker  dialog.FilePicker
+	menu    dialog.Menu
+	rename  dialog.Rename
 	mode    appMode
 	focus   pane           // which pane gets nav keys in modeNormal
 	pending vpn.Config     // connection awaiting credentials
@@ -136,6 +140,8 @@ func New(configs []vpn.Config, mgr *vpn.Manager) *UI {
 	m.log = NewLog()
 	m.creds = dialog.NewCredentials()
 	m.picker = dialog.NewFilePicker("add connection")
+	m.menu = dialog.NewMenu()
+	m.rename = dialog.NewRename()
 	return m
 }
 
@@ -219,6 +225,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateAdd(msg)
 	case modeConfirm:
 		return m.updateConfirm(msg)
+	case modeMenu:
+		return m.updateMenu(msg)
+	case modeRename:
+		return m.updateRename(msg)
 	}
 
 	// In normal mode the focused pane captures navigation. The log pane
@@ -256,17 +266,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "x":
-			// Forget saved creds for the selected connection (e.g. after a
-			// password change) so the next connect prompts again. Only ask when
-			// there is actually something stored — no popup for a no-op.
-			if cfg, ok := m.sidebar.SelectedConfig(); ok {
-				if _, _, has, _ := vpn.LoadCreds(cfg.Name); has {
-					name := cfg.Name
-					m.confirm = dialog.NewConfirm("forget credentials",
-						"Forget saved credentials for\n\""+name+"\"?",
-						func() tea.Cmd { _ = vpn.ForgetCreds(name); return nil })
-					m.mode = modeConfirm
-				}
+			// Open the per-connection action menu (forget creds lives in it).
+			if name := m.sidebar.SelectedName(); name != "" {
+				m.menu.Open(name)
+				m.mode = modeMenu
 			}
 			return m, nil
 		}
@@ -330,6 +333,83 @@ func (m *UI) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeNormal
 	}
 	return m, nil
+}
+
+// updateMenu handles input while the per-connection action menu is open. Each
+// action has a key; esc/x close the menu. The selected connection was fixed when
+// the menu opened, so the actions read it back through the sidebar selection.
+func (m *UI) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	switch key.String() {
+	case "r":
+		return m.openRename() // swaps modeMenu → modeRename (or no-op)
+	case "f":
+		m.mode = modeNormal
+		m.forgetCreds() // may re-open as the forget-confirm popup
+	case "d":
+		m.mode = modeNormal
+		m.deleteConn() // re-opens as the delete-confirm popup
+	case "esc", "x":
+		m.mode = modeNormal
+	}
+	return m, nil
+}
+
+// forgetCreds opens the forget-credentials confirm for the selected connection,
+// but only when it actually has creds saved (no-op otherwise — no popup for a
+// no-op). The menu's "f" action.
+func (m *UI) forgetCreds() {
+	cfg, ok := m.sidebar.SelectedConfig()
+	if !ok {
+		return
+	}
+	if _, _, has, _ := vpn.LoadCreds(cfg.Name); !has {
+		return
+	}
+	name := cfg.Name
+	m.confirm = dialog.NewConfirm("forget credentials",
+		"Forget saved credentials for\n\""+name+"\"?",
+		func() tea.Cmd { _ = vpn.ForgetCreds(name); return nil })
+	m.mode = modeConfirm
+}
+
+// deleteConn opens the delete-connection confirm for the selected connection.
+// Deleting is destructive — it removes the config file and any saved creds — so
+// it always confirms. When the connection is in use the message says the delete
+// will disconnect it first. The menu's "d" action.
+func (m *UI) deleteConn() {
+	cfg, ok := m.sidebar.SelectedConfig()
+	if !ok {
+		return
+	}
+	message := "Delete connection\n\"" + cfg.Name + "\"?\nRemoves its config file and saved credentials."
+	if m.inUse(cfg) {
+		message = "\"" + cfg.Name + "\" is active.\nDelete will disconnect it, then remove its\nconfig file and saved credentials."
+	}
+	m.confirm = dialog.NewConfirm("delete connection", message,
+		func() tea.Cmd { return m.doDelete(cfg) })
+	m.mode = modeConfirm
+}
+
+// doDelete removes the connection from disk (file + keyring) and from the UI. It
+// tears the tunnel down first when the connection is in use, since the state
+// that would otherwise dangle (live channel, reconnect config) is keyed by name.
+// A delete failure surfaces the error and leaves the connection in place.
+func (m *UI) doDelete(cfg vpn.Config) tea.Cmd {
+	if err := vpn.DeleteConfig(cfg); err != nil {
+		m.log.SetError(err.Error())
+		return nil
+	}
+	if m.inUse(cfg) {
+		m.disconnect() // stop the live tunnel / cancel a pending reconnect
+	}
+	m.sidebar.RemoveConfig(cfg)
+	m.log.DropBuffer(cfg.Name)
+	m.log.ShowBuffer(m.sidebar.SelectedName()) // show whatever is selected now (placeholder if none)
+	return nil
 }
 
 // updateLogNav handles input while the log pane is focused: esc
@@ -554,6 +634,10 @@ func (m *UI) View() tea.View {
 		body = common.Center(body, m.picker.View())
 	case modeConfirm:
 		body = common.Center(body, m.confirm.View())
+	case modeMenu:
+		body = common.Center(body, m.menu.View())
+	case modeRename:
+		body = common.Center(body, m.rename.View())
 	}
 	return altView(body + "\n" + m.statusLine() + "\n" + helpStyle.Render(m.helpFooter()))
 }

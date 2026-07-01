@@ -134,8 +134,24 @@ func TestAddConfirmImports(t *testing.T) {
 	}
 }
 
-// Pressing "x" with no saved credentials is a no-op — the confirm popup only
-// appears when there is actually something to forget.
+// "x" opens the per-connection action menu; esc closes it back to normal mode.
+func TestMenuOpensAndCloses(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := out.(*UI).mode; got != modeMenu {
+		t.Fatalf("mode = %v after x, want modeMenu", got)
+	}
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if got := out.(*UI).mode; got != modeNormal {
+		t.Errorf("mode = %v after esc, want modeNormal", got)
+	}
+}
+
+// Menu "f" with no saved credentials closes the menu without a confirm — the
+// forget popup only appears when there is actually something to forget.
 func TestForgetNoSavedCredsNoPopup(t *testing.T) {
 	keyring.MockInit()
 
@@ -143,14 +159,15 @@ func TestForgetNoSavedCredsNoPopup(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'f', Text: "f"}) // forget
 	if got := out.(*UI).mode; got != modeNormal {
 		t.Errorf("mode = %v with no saved creds, want modeNormal (no popup)", got)
 	}
 }
 
-// "x" on a connection with saved credentials opens the confirm popup; confirming
-// deletes the keyring entry.
+// Menu "f" on a connection with saved credentials opens the confirm popup;
+// confirming deletes the keyring entry.
 func TestForgetConfirmDeletes(t *testing.T) {
 	keyring.MockInit()
 	if err := vpn.SaveCreds("vpn", "u", "p"); err != nil {
@@ -161,10 +178,11 @@ func TestForgetConfirmDeletes(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'f', Text: "f"}) // forget
 	mm := out.(*UI)
 	if mm.mode != modeConfirm {
-		t.Fatalf("mode = %v after x with saved creds, want modeConfirm", mm.mode)
+		t.Fatalf("mode = %v after menu forget with saved creds, want modeConfirm", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
@@ -187,8 +205,9 @@ func TestForgetCancelKeeps(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})    // open confirm
-	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'f', Text: "f"}) // forget → confirm
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})     // cancel
 	if got := out.(*UI).mode; got != modeNormal {
 		t.Errorf("mode = %v after cancel, want modeNormal", got)
 	}
@@ -812,5 +831,289 @@ func TestArmReconnectUnreadableConfig(t *testing.T) {
 	m.armReconnect(vpn.Config{Name: "ghost", Path: "/does/not/exist.ovpn"})
 	if m.reArmed {
 		t.Error("reArmed = true for an unreadable config, want false")
+	}
+}
+
+// "r" in the menu opens the rename prompt, prefilled with the selected name.
+func TestMenuRenameOpensPrompt(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	mm := out.(*UI)
+	if mm.mode != modeRename {
+		t.Fatalf("mode = %v after menu rename, want modeRename", mm.mode)
+	}
+	if got := mm.rename.Value(); got != "vpn" {
+		t.Errorf("rename field = %q, want prefilled vpn", got)
+	}
+}
+
+// The full rename path: x → r, edit the name, enter renames the file on disk and
+// updates the sidebar entry.
+func TestRenameConfirmRenamesFileAndSidebar(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "old", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename (prefill "old")
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-2"})           // → "old-2"
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // confirm
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after rename, want modeNormal", mm.mode)
+	}
+	cfg, _ := mm.sidebar.SelectedConfig()
+	if cfg.Name != "old-2" {
+		t.Errorf("sidebar name = %q, want old-2", cfg.Name)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old-2.ovpn")); err != nil {
+		t.Errorf("renamed file missing: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("old file still present after rename")
+	}
+	// The log pane retitles to the new name (buffer remapped + shown).
+	if v := mm.log.View(false); !strings.Contains(v, "old-2") {
+		t.Errorf("log pane not refreshed to the new name:\n%s", v)
+	}
+}
+
+// A pending auto-reconnect also counts as in use: renaming that config is
+// refused (its reCfg is keyed by the old path/name).
+func TestRenameBlockedWhileReconnectArmed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conn.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vpn.Config{Name: "conn", Path: path}
+
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.reArmed = true // a redial is pending (logCh nil, no live tunnel)
+	m.reCfg = cfg
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-2"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	mm := out.(*UI)
+
+	if mm.mode != modeRename {
+		t.Errorf("mode = %v, want modeRename (blocked by pending reconnect)", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file renamed despite a pending reconnect: %v", err)
+	}
+}
+
+// Renaming a connection that is live is refused: the prompt stays open with an
+// error and the file is untouched (name-keyed state would otherwise desync).
+func TestRenameBlockedWhenConnected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "live.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "live", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection("live")
+	m.logCh = make(chan string) // simulate a live stream
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-2"})           // edit
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // confirm → blocked
+	mm := out.(*UI)
+
+	if mm.mode != modeRename {
+		t.Errorf("mode = %v, want modeRename (blocked, stays open)", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("live config file renamed despite being in use: %v", err)
+	}
+}
+
+// An invalid new name keeps the prompt open and leaves the file untouched.
+func TestRenameInvalidNameStaysOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "old", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "/evil"})        // invalid (path sep)
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // confirm → error
+	mm := out.(*UI)
+
+	if mm.mode != modeRename {
+		t.Errorf("mode = %v after invalid name, want modeRename (stays open)", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("original file gone after a refused rename: %v", err)
+	}
+}
+
+// Menu "d" opens the delete-connection confirm.
+func TestMenuDeleteOpensConfirm(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	if got := out.(*UI).mode; got != modeConfirm {
+		t.Fatalf("mode = %v after menu delete, want modeConfirm", got)
+	}
+}
+
+// Confirming a delete removes the file, its saved creds, and the sidebar entry;
+// the cursor clamps to a remaining connection.
+func TestDeleteConfirmRemovesEverything(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "gone.ovpn")
+	keep := filepath.Join(dir, "keep.ovpn")
+	for _, p := range []string{gone, keep} {
+		if err := os.WriteFile(p, []byte("client\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := vpn.SaveCreds("gone", "u", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "gone", Path: gone}, {Name: "keep", Path: keep}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.sidebar.Move(1) // select "keep"... then back to delete "gone"
+	m.sidebar.Move(-1)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu on "gone"
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after delete, want modeNormal", mm.mode)
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Error("deleted file still present")
+	}
+	if _, _, ok, _ := vpn.LoadCreds("gone"); ok {
+		t.Error("credentials still present after delete")
+	}
+	if cfg, ok := mm.sidebar.SelectedConfig(); !ok || cfg.Name != "keep" {
+		t.Errorf("selected = %+v ok=%v, want keep", cfg, ok)
+	}
+}
+
+// Cancelling the delete confirm leaves the file, creds, and list untouched.
+func TestDeleteCancelKeeps(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keep.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := vpn.SaveCreds("keep", "u", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "keep", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})     // cancel
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Errorf("mode = %v after cancel, want modeNormal", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file removed after cancelling delete: %v", err)
+	}
+	if _, _, ok, _ := vpn.LoadCreds("keep"); !ok {
+		t.Error("credentials removed after cancelling delete")
+	}
+	if _, ok := mm.sidebar.SelectedConfig(); !ok {
+		t.Error("connection removed from the list after cancelling delete")
+	}
+}
+
+// Deleting a live connection tears the tunnel down first, then removes it.
+func TestDeleteLiveConnectionDisconnectsAndRemoves(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "live.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "live", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection("live")
+	m.logCh = make(chan string) // simulate a live stream
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm
+	mm := out.(*UI)
+
+	if mm.logCh != nil {
+		t.Error("logCh still set after deleting the live connection")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("deleted file still present")
+	}
+	if _, ok := mm.sidebar.SelectedConfig(); ok {
+		t.Error("connection still listed after delete")
+	}
+}
+
+// A delete that fails (the file can't be removed) surfaces the error and leaves
+// the connection in the list.
+func TestDeleteFailureKeepsConnection(t *testing.T) {
+	keyring.MockInit()
+	// A path with no file on disk makes vpn.DeleteConfig's os.Remove fail.
+	ghost := filepath.Join(t.TempDir(), "ghost.ovpn")
+	m := New([]vpn.Config{{Name: "ghost", Path: ghost}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm → fails
+	mm := out.(*UI)
+
+	if _, ok := mm.sidebar.SelectedConfig(); !ok {
+		t.Error("connection removed from the list despite the delete failing")
+	}
+	if mm.log.State() != StateError {
+		t.Errorf("state = %v after a failed delete, want StateError", mm.log.State())
 	}
 }
