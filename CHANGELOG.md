@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `x` now opens a per-connection action menu instead of forgetting credentials
+  directly. Forget saved credentials moved into the menu under `f` (it still
+  asks for confirmation). The menu is the home for upcoming per-connection
+  actions.
+
 ## [0.6.0] - 2026-06-30
 
 ### Added

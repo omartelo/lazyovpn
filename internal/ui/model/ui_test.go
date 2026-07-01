@@ -134,8 +134,24 @@ func TestAddConfirmImports(t *testing.T) {
 	}
 }
 
-// Pressing "x" with no saved credentials is a no-op — the confirm popup only
-// appears when there is actually something to forget.
+// "x" opens the per-connection action menu; esc closes it back to normal mode.
+func TestMenuOpensAndCloses(t *testing.T) {
+	m := New([]vpn.Config{{Name: "vpn", Path: "/x/vpn.ovpn"}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := out.(*UI).mode; got != modeMenu {
+		t.Fatalf("mode = %v after x, want modeMenu", got)
+	}
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if got := out.(*UI).mode; got != modeNormal {
+		t.Errorf("mode = %v after esc, want modeNormal", got)
+	}
+}
+
+// Menu "f" with no saved credentials closes the menu without a confirm — the
+// forget popup only appears when there is actually something to forget.
 func TestForgetNoSavedCredsNoPopup(t *testing.T) {
 	keyring.MockInit()
 
@@ -143,14 +159,15 @@ func TestForgetNoSavedCredsNoPopup(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'f', Text: "f"}) // forget
 	if got := out.(*UI).mode; got != modeNormal {
 		t.Errorf("mode = %v with no saved creds, want modeNormal (no popup)", got)
 	}
 }
 
-// "x" on a connection with saved credentials opens the confirm popup; confirming
-// deletes the keyring entry.
+// Menu "f" on a connection with saved credentials opens the confirm popup;
+// confirming deletes the keyring entry.
 func TestForgetConfirmDeletes(t *testing.T) {
 	keyring.MockInit()
 	if err := vpn.SaveCreds("vpn", "u", "p"); err != nil {
@@ -161,10 +178,11 @@ func TestForgetConfirmDeletes(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'f', Text: "f"}) // forget
 	mm := out.(*UI)
 	if mm.mode != modeConfirm {
-		t.Fatalf("mode = %v after x with saved creds, want modeConfirm", mm.mode)
+		t.Fatalf("mode = %v after menu forget with saved creds, want modeConfirm", mm.mode)
 	}
 
 	out, _ = mm.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
@@ -187,8 +205,9 @@ func TestForgetCancelKeeps(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = sized.(*UI)
 
-	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})    // open confirm
-	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // open menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'f', Text: "f"}) // forget → confirm
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})     // cancel
 	if got := out.(*UI).mode; got != modeNormal {
 		t.Errorf("mode = %v after cancel, want modeNormal", got)
 	}
