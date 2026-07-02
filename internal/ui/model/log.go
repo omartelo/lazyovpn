@@ -118,9 +118,11 @@ func (l *Log) Scroll(msg tea.Msg) tea.Cmd {
 }
 
 // MarkConnected enters the connected state — the tunnel is up. Driven by the
-// management state poll (vpn.QueryState), not by log content.
+// management state poll (vpn.QueryState), not by log content. A stale operation
+// error is superseded by the tunnel coming up.
 func (l *Log) MarkConnected() {
 	l.state = StateConnected
+	l.errMsg = ""
 }
 
 // MarkClosed records that the active stream ended (process exited).
@@ -154,11 +156,23 @@ func (l *Log) MarkDisconnected() {
 	l.state = StateDisconnected
 }
 
-// SetError enters the error state with a message.
+// SetError records msg, flipping the badge to the error state only when no
+// active connection owns it. An operation error (failed delete, unreadable
+// config) while a tunnel is live/coming up/redialing must not repaint the badge
+// or derail the state machine keyed on it (state poll, auto-reconnect); the
+// message still surfaces in the status line.
 func (l *Log) SetError(msg string) {
-	l.state = StateError
 	l.errMsg = msg
+	switch l.state {
+	case StateConnecting, StateConnected, StateReconnecting:
+		// the live connection keeps its badge
+	default:
+		l.state = StateError
+	}
 }
+
+// ClearError drops a stale operation error — a new action supersedes it.
+func (l *Log) ClearError() { l.errMsg = "" }
 
 // ShowBuffer renders connection name's output into the viewport (placeholder if empty).
 func (l *Log) ShowBuffer(name string) {

@@ -107,14 +107,50 @@ func TestLogMarkDisconnected(t *testing.T) {
 	}
 }
 
+// SetError always records the message, but flips the badge to error only when
+// no active connection owns it — an operation error (failed delete, unreadable
+// config) must not repaint a live tunnel's badge or derail the state machine
+// keyed on it (state poll, auto-reconnect).
 func TestLogSetError(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ConnState
+		want  ConnState
+	}{
+		{"idle flips to error", StateIdle, StateError},
+		{"disconnected flips to error", StateDisconnected, StateError},
+		{"connecting keeps its badge", StateConnecting, StateConnecting},
+		{"connected keeps its badge", StateConnected, StateConnected},
+		{"reconnecting keeps its badge", StateReconnecting, StateReconnecting},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			term := newSizedLog()
+			term.state = tt.state
+			term.SetError("boom")
+			if term.State() != tt.want {
+				t.Errorf("State() = %v, want %v", term.State(), tt.want)
+			}
+			if term.Err() != "boom" {
+				t.Errorf("Err() = %q, want boom", term.Err())
+			}
+		})
+	}
+}
+
+// The tunnel coming up supersedes a stale operation error, and ClearError drops
+// one when a new action does.
+func TestLogErrorClearing(t *testing.T) {
 	term := newSizedLog()
 	term.SetError("boom")
-	if term.State() != StateError {
-		t.Errorf("State() = %v, want StateError", term.State())
+	term.MarkConnected()
+	if term.Err() != "" {
+		t.Errorf("Err() = %q after MarkConnected, want cleared", term.Err())
 	}
-	if term.Err() != "boom" {
-		t.Errorf("Err() = %q, want boom", term.Err())
+	term.SetError("boom again")
+	term.ClearError()
+	if term.Err() != "" {
+		t.Errorf("Err() = %q after ClearError, want cleared", term.Err())
 	}
 }
 

@@ -403,6 +403,7 @@ func (m *UI) doDelete(cfg vpn.Config) tea.Cmd {
 		m.log.SetError(err.Error())
 		return nil
 	}
+	m.log.ClearError() // this delete succeeded; drop any stale operation error
 	if m.inUse(cfg) {
 		m.disconnect() // stop the live tunnel / cancel a pending reconnect
 	}
@@ -524,7 +525,8 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 	if m.logCh != nil && cfg.Name == m.log.ActiveName() {
 		return m, nil
 	}
-	m.reAttempts = 0 // a manual connect starts with a full retry budget
+	m.log.ClearError() // a new connect attempt supersedes any stale operation error
+	m.reAttempts = 0   // a manual connect starts with a full retry budget
 	needs, err := vpn.NeedsAuth(cfg)
 	if err != nil {
 		m.log.SetError(err.Error())
@@ -662,7 +664,9 @@ func altView(content string) tea.View {
 
 func (m *UI) statusLine() string {
 	line := " " + m.log.State().Badge()
-	if m.log.State() == StateError && m.log.Err() != "" {
+	// An error shows whatever the badge says — an operation can fail while a
+	// live connection keeps owning the badge (see Log.SetError).
+	if m.log.Err() != "" {
 		line += nameStyle.Render(": " + m.log.Err())
 	} else if name := m.log.ActiveName(); name != "" {
 		line += "  " + nameStyle.Render(name)

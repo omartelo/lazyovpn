@@ -762,6 +762,52 @@ func TestReconnectFireGivesUpWithoutKeyring(t *testing.T) {
 	}
 }
 
+// An operation error while a tunnel is live (a failed delete, an unreadable
+// config on enter) must not repaint the badge or disable auto-reconnect: the
+// state stays connected and a later real drop still schedules the redial.
+func TestOpErrorWhileConnectedKeepsReconnect(t *testing.T) {
+	m, ch := armedConnected(t, "alpha")
+
+	m.log.SetError("delete config: permission denied") // op unrelated to the tunnel
+	if m.log.State() != StateConnected {
+		t.Fatalf("op error repainted the badge: State() = %v, want StateConnected", m.log.State())
+	}
+
+	out, cmd := m.Update(utils.LogClosedMsg{Ch: ch})
+	mm := out.(*UI)
+	if cmd == nil {
+		t.Error("drop after an op error produced no reconnect timer")
+	}
+	if mm.log.State() != StateReconnecting {
+		t.Errorf("state = %v after drop, want StateReconnecting", mm.log.State())
+	}
+}
+
+// statusLine surfaces an operation error even while the badge shows a live
+// connection — the message must not stay invisible until the tunnel ends.
+func TestStatusLineShowsOpErrorWhileConnected(t *testing.T) {
+	m, _ := armedConnected(t, "alpha")
+	m.log.SetError("boom")
+	if got := m.statusLine(); !strings.Contains(got, "boom") {
+		t.Errorf("statusLine = %q, want it to contain the op error", got)
+	}
+}
+
+// A new connect attempt supersedes a stale operation error.
+func TestEnterClearsStaleError(t *testing.T) {
+	keyring.MockInit()
+	cfg := writeTempConfig(t, "secured", "client\nauth-user-pass\n")
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.SetError("boom")
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // opens the auth modal
+	if got := out.(*UI).log.Err(); got != "" {
+		t.Errorf("Err() = %q after enter, want cleared", got)
+	}
+}
+
 // statusLine surfaces the error message when in error state, otherwise the
 // active connection name.
 func TestStatusLine(t *testing.T) {
