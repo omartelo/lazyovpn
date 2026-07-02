@@ -533,8 +533,9 @@ func (m *UI) enter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if needs {
-		// Saved creds skip the prompt. On any keyring error fall back to asking.
-		if user, pass, ok, err := vpn.LoadCreds(cfg.Name); ok && err == nil {
+		// Saved creds skip the prompt. Any keyring error resolves to ok=false
+		// (LoadCreds's contract), falling back to asking.
+		if user, pass, ok, _ := vpn.LoadCreds(cfg.Name); ok {
 			return m.connect(cfg, user, pass)
 		}
 		m.pending = cfg

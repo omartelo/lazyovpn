@@ -11,5 +11,8 @@ unleash:
     # Efficacy = KILLED / (KILLED + LIVED) — quality of the tests over covered
     # code. NOT-COVERED mutants (headless-only paths: pkexec, GUI, View) are
     # excluded from this number, so untestable code never drags the gate down.
-    # Gremlins exits non-zero below this, failing CI. Baseline is ~90%.
-    efficacy: 85
+    # Gremlins exits non-zero below this, failing CI. Baseline is ~95.5%; the
+    # remaining lived mutants are equivalent or untestable (output-identical
+    # mutations, real-clock boundaries, slog args, the privileged signalQuit
+    # path), so the practical ceiling sits just under 96%.
+    efficacy: 90

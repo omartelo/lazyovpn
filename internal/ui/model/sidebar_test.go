@@ -111,6 +111,43 @@ func TestSidebarAddConfig(t *testing.T) {
 	}
 }
 
+func TestSidebarRemoveConfig(t *testing.T) {
+	t.Run("cursor on removed last row clamps to previous", func(t *testing.T) {
+		s := NewSidebar(sampleConfigs(), &shared{}) // alpha, beta
+		s.Move(1)                                   // cursor on beta (last)
+		s.RemoveConfig(vpn.Config{Name: "beta", Path: "/etc/openvpn/beta.conf"})
+
+		cfg, ok := s.SelectedConfig()
+		if !ok {
+			t.Fatal("SelectedConfig() ok = false after remove, want true")
+		}
+		if cfg.Name != "alpha" {
+			t.Errorf("SelectedConfig() = %q after removing last row, want alpha", cfg.Name)
+		}
+	})
+
+	t.Run("removing the only config leaves a sane empty list", func(t *testing.T) {
+		s := NewSidebar([]vpn.Config{{Name: "solo", Path: "/etc/openvpn/solo.ovpn"}}, &shared{})
+		s.RemoveConfig(vpn.Config{Name: "solo", Path: "/etc/openvpn/solo.ovpn"})
+
+		if _, ok := s.SelectedConfig(); ok {
+			t.Error("SelectedConfig() ok = true on emptied list, want false")
+		}
+		s.Move(1) // must not panic after the clamp to an empty list
+		if got := s.SelectedName(); got != "" {
+			t.Errorf("SelectedName() = %q on emptied list, want empty", got)
+		}
+	})
+
+	t.Run("cursor before the removed row is untouched", func(t *testing.T) {
+		s := NewSidebar(sampleConfigs(), &shared{}) // cursor on alpha
+		s.RemoveConfig(vpn.Config{Name: "beta", Path: "/etc/openvpn/beta.conf"})
+		if got := s.SelectedName(); got != "alpha" {
+			t.Errorf("SelectedName() = %q, want alpha", got)
+		}
+	})
+}
+
 func TestSidebarEmpty(t *testing.T) {
 	s := NewSidebar(nil, &shared{})
 	if got := s.SelectedName(); got != "" {

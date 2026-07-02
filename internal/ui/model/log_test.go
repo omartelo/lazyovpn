@@ -94,6 +94,53 @@ func TestLogMarkClosed(t *testing.T) {
 	}
 }
 
+// MarkClosed refreshes the viewport only when it is showing the connection
+// that closed: the exit marker must appear there, but a user reading another
+// connection's history must not have their view swapped out from under them.
+func TestLogMarkClosedViewportRefresh(t *testing.T) {
+	t.Run("showing the active connection sees the exit marker", func(t *testing.T) {
+		term := newSizedLog()
+		term.StartConnection("alpha")
+		term.AppendLog("running")
+		term.MarkClosed()
+		if got := term.vp.View(); !strings.Contains(got, "[process exited]") {
+			t.Errorf("viewport = %q, want the exit marker rendered", got)
+		}
+	})
+
+	t.Run("showing another connection keeps its view", func(t *testing.T) {
+		term := newSizedLog()
+		term.StartConnection("alpha")
+		term.AppendLog("running")
+		term.ShowBuffer("beta") // user navigated away
+		term.MarkClosed()
+		if got := term.vp.View(); strings.Contains(got, "[process exited]") {
+			t.Errorf("viewport = %q, must not swap to the closed connection's buffer", got)
+		}
+	})
+}
+
+// Same contract for MarkReconnecting: the gap marker renders when the dropped
+// connection is the one on screen.
+func TestLogMarkReconnectingViewportRefresh(t *testing.T) {
+	term := newSizedLog()
+	term.StartConnection("alpha")
+	term.AppendLog("running")
+	term.MarkReconnecting(1)
+	if got := term.vp.View(); !strings.Contains(got, "reconnecting (1/") {
+		t.Errorf("viewport = %q, want the reconnect marker rendered", got)
+	}
+
+	term = newSizedLog()
+	term.StartConnection("alpha")
+	term.AppendLog("running")
+	term.ShowBuffer("beta")
+	term.MarkReconnecting(1)
+	if got := term.vp.View(); strings.Contains(got, "reconnecting (1/") {
+		t.Errorf("viewport = %q, must not swap to the dropped connection's buffer", got)
+	}
+}
+
 func TestLogMarkDisconnected(t *testing.T) {
 	term := newSizedLog()
 	term.StartConnection("alpha")
@@ -235,6 +282,58 @@ func TestLogScroll(t *testing.T) {
 	if term.vp.AtBottom() {
 		t.Error("pgup via Scroll did not move the viewport off the bottom")
 	}
+}
+
+func TestLogRenameBuffer(t *testing.T) {
+	t.Run("moves the buffer and re-keys shown and active", func(t *testing.T) {
+		term := newSizedLog()
+		term.StartConnection("alpha") // shown = active = alpha
+		term.AppendLog("history line")
+		term.RenameBuffer("alpha", "beta")
+
+		if term.buffers["alpha"] != nil {
+			t.Error("old buffer key still present after rename")
+		}
+		if b := term.buffers["beta"]; b == nil || !strings.Contains(b.String(), "history line") {
+			t.Error("buffer content did not move to the new name")
+		}
+		if term.ActiveName() != "beta" {
+			t.Errorf("ActiveName() = %q, want beta", term.ActiveName())
+		}
+		if term.shownName != "beta" {
+			t.Errorf("shownName = %q, want beta", term.shownName)
+		}
+		// the live stream keeps landing in the renamed buffer
+		term.AppendLog("after rename")
+		if got := term.buffers["beta"].String(); !strings.Contains(got, "after rename") {
+			t.Errorf("buffer = %q, want the post-rename line", got)
+		}
+	})
+
+	t.Run("same name is a no-op that keeps the buffer", func(t *testing.T) {
+		term := newSizedLog()
+		term.StartConnection("alpha")
+		term.AppendLog("history line")
+		term.RenameBuffer("alpha", "alpha")
+
+		if b := term.buffers["alpha"]; b == nil || !strings.Contains(b.String(), "history line") {
+			t.Error("rename to the same name dropped the buffer")
+		}
+	})
+
+	t.Run("unrelated shown and active names are untouched", func(t *testing.T) {
+		term := newSizedLog()
+		term.StartConnection("gamma")
+		term.ShowBuffer("delta")
+		term.RenameBuffer("alpha", "beta") // renames a third connection
+
+		if term.ActiveName() != "gamma" {
+			t.Errorf("ActiveName() = %q, want gamma", term.ActiveName())
+		}
+		if term.shownName != "delta" {
+			t.Errorf("shownName = %q, want delta", term.shownName)
+		}
+	})
 }
 
 func TestConnStateBadge(t *testing.T) {
