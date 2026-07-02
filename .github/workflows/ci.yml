@@ -30,19 +30,27 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      # gotestsum wraps `go test -json`: per-test lines + a DONE count in the
+      # job log, and the raw JSON stream for the summary step to count.
       - name: test + coverage
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
-
-      - name: coverage summary
         run: |
-          go tool cover -func=coverage.out | tail -1 # raw line in the job log
-          pct=$(go tool cover -func=coverage.out | awk '/^total:/ {print $NF}')
+          go run gotest.tools/gotestsum@v1.13.0 --format testname --jsonfile test.json -- \
+            -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: test summary
+        if: ${{ !cancelled() }} # counts matter most when tests fail
+        run: |
+          [ -f test.json ] || exit 0 # earlier step (gofmt/vet) failed before tests ran
+          count() { jq -rs --arg a "$1" '[.[] | select(.Test and .Action==$a)] | length' test.json; }
+          passed=$(count pass); failed=$(count fail); skipped=$(count skip)
+          pct="n/a"
+          [ -f coverage.out ] && pct=$(go tool cover -func=coverage.out | awk '/^total:/ {print $NF}')
           {
-            echo "### Coverage"
+            echo "### Tests"
             echo
-            echo "| Metric | Value |"
-            echo "| --- | --- |"
-            echo "| Statements | \`$pct\` |"
+            echo "| Passed | Failed | Skipped | Coverage |"
+            echo "| --- | --- | --- | --- |"
+            echo "| $passed | $failed | $skipped | \`$pct\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: upload coverage
@@ -109,7 +117,7 @@ jobs:
           lived=$(grep -oE 'Lived: [0-9]+' gremlins.log | grep -oE '[0-9]+$')
           notcov=$(grep -oE 'Not covered: [0-9]+' gremlins.log | grep -oE '[0-9]+$')
           # gate lives in .gremlins.yaml (threshold.efficacy); keep in sync.
-          gate=$(awk -v e="$eff" 'BEGIN { print (e >= 85) ? "✅" : "❌" }')
+          gate=$(awk -v e="$eff" 'BEGIN { print (e >= 90) ? "✅" : "❌" }')
           {
             echo "### Mutation testing"
             echo
@@ -118,7 +126,7 @@ jobs:
             echo "| Killed | $killed |"
             echo "| Lived | $lived |"
             echo "| Not covered | $notcov |"
-            echo "| Test efficacy | \`${eff}%\` $gate (gate ≥ 85%) |"
+            echo "| Test efficacy | \`${eff}%\` $gate (gate ≥ 90%) |"
             echo "| Mutator coverage | \`${mcov}%\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$code"
