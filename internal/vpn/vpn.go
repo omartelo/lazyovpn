@@ -353,7 +353,11 @@ func QueryState(sock string) string {
 
 // Connect starts openvpn via pkexec (prompts the user for root) and returns a
 // channel of stdout+stderr lines. The channel closes when openvpn exits.
-// Any previous connection is killed first.
+// Any previous connection is killed first — but only once every fallible setup
+// step (credentials file, pty) has succeeded, so a failed switch leaves the
+// current tunnel running rather than tearing it down for a connection that
+// never starts. (A cmd.Start failure still lands after the teardown: the old
+// process cannot share the tunnel with the one about to spawn.)
 //
 // When username/password are non-empty they are written to a temporary
 // credentials file passed via --auth-user-pass; the file is removed when the
@@ -363,7 +367,6 @@ func QueryState(sock string) string {
 func (m *Manager) Connect(c Config, username, password string) (<-chan string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stop()
 
 	// Never log username/password — only the config identity (invariant 6).
 	slog.Info("connecting", "name", c.Name, "path", c.Path, "auth", username != "" || password != "")
@@ -404,6 +407,9 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	}
 	cmd.Stdout = slave
 	cmd.Stderr = slave
+
+	// All fallible setup is done — only now tear down the previous connection.
+	m.stop()
 
 	if err := cmd.Start(); err != nil {
 		master.Close()

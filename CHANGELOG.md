@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Switching connections no longer tears the current tunnel down when the new
+  connection fails during setup (credentials file, pty): the previous openvpn
+  is stopped only once the new one is ready to start.
 - An operation error while a tunnel is live (a failed delete of a root-owned
   config, an unreadable config on connect) no longer repaints the connection
   badge to "error" or silently disables auto-reconnect for the live tunnel.

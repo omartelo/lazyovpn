@@ -285,6 +285,45 @@ func TestConnectStartErrorRemovesCreds(t *testing.T) {
 	}
 }
 
+// A switch whose setup fails (creds file unwritable here) must leave the
+// previous connection running: the old tunnel is torn down only once the new
+// connection is ready to start, so a failed switch doesn't kill it for nothing.
+func TestFailedConnectKeepsPrevious(t *testing.T) {
+	swap(t, fakeExec("sleep"))
+	cfg := writeConfig(t, "client\nauth-user-pass\n")
+
+	m := NewManager()
+	ch1, err := m.Connect(cfg, "", "")
+	if err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	// Drain the helper's two banner lines; it then stays alive until killed.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ch1:
+		case <-time.After(10 * time.Second):
+			t.Fatal("first connection produced no output")
+		}
+	}
+
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "missing")) // creds write fails
+	if _, err := m.Connect(cfg, "alice", "s3cret"); err == nil {
+		t.Fatal("second Connect: want setup error, got nil")
+	}
+
+	select {
+	case _, ok := <-ch1:
+		if !ok {
+			t.Fatal("failed second Connect tore down the first connection")
+		}
+		t.Fatal("unexpected extra output from the first connection")
+	case <-time.After(100 * time.Millisecond):
+		// channel still open — the first connection survived the failed switch
+	}
+	_ = m.Disconnect()
+	drain(t, ch1)
+}
+
 // If the credentials file cannot be written, Connect fails before spawning
 // anything — no process, no error swallowed.
 func TestConnectWriteCredsError(t *testing.T) {
