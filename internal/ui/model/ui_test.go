@@ -424,7 +424,7 @@ func TestDropSchedulesReconnect(t *testing.T) {
 	}
 }
 
-// A close from a stale channel (invariant #4) must not trigger a reconnect.
+// A close from a stale channel must not trigger a reconnect.
 func TestForeignDropIgnored(t *testing.T) {
 	m, ch := armedConnected(t, "alpha")
 

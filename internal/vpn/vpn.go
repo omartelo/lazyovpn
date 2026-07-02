@@ -370,7 +370,7 @@ func (m *Manager) Connect(c Config, username, password string) (<-chan string, e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Never log username/password — only the config identity (invariant 6).
+	// Never log username/password — only the config identity.
 	slog.Info("connecting", "name", c.Name, "path", c.Path, "auth", username != "" || password != "")
 
 	args := []string{"openvpn", "--config", c.Path}

@@ -192,7 +192,7 @@ func TestConnectGivesChildATTY(t *testing.T) {
 
 // The whole reason creds go to tmpfs: written for the process, gone when it ends.
 // This proves the file is created, passed to openvpn with the right content, and
-// removed once the connection closes (hard invariant: no plaintext left behind).
+// removed once the connection closes — no plaintext left behind.
 func TestConnectWritesCredsAndRemovesOnExit(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	swap(t, fakeExec("creds"))
