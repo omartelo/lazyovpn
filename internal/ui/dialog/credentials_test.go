@@ -41,6 +41,54 @@ func TestCredentialsResetClears(t *testing.T) {
 	}
 }
 
+func TestCredentialsSaveToggle(t *testing.T) {
+	c := NewCredentials()
+	c.Open("vpn1")
+
+	if c.Save() {
+		t.Fatal("save toggle starts on, must be opt-in")
+	}
+	ctrlS := tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
+	c.Handle(ctrlS)
+	if !c.Save() {
+		t.Fatal("ctrl+s did not turn the save toggle on")
+	}
+	if !strings.Contains(c.View(), "[x]") {
+		t.Error("enabled toggle not rendered as [x]")
+	}
+	c.Handle(ctrlS)
+	if c.Save() {
+		t.Error("second ctrl+s did not turn the save toggle off")
+	}
+}
+
+func TestCredentialsResetClearsSaveToggle(t *testing.T) {
+	c := NewCredentials()
+	c.Open("vpn1")
+	c.Handle(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+
+	c.Reset()
+	if c.Save() {
+		t.Error("save toggle survived Reset")
+	}
+}
+
+func TestCredentialsFocusRoundTrip(t *testing.T) {
+	c := NewCredentials()
+	c.Open("vpn1")
+
+	c.Handle(tea.KeyPressMsg{Code: tea.KeyTab}) // -> password
+	c.Handle(tea.KeyPressMsg{Code: tea.KeyTab}) // -> back to username
+	c = typeRunes(c, "bob")
+
+	if c.Username() != "bob" {
+		t.Errorf("Username() = %q after tab round trip, want bob", c.Username())
+	}
+	if c.Password() != "" {
+		t.Errorf("Password() = %q, want empty (typing must land on username)", c.Password())
+	}
+}
+
 func TestCredentialsPasswordMasked(t *testing.T) {
 	c := NewCredentials()
 	c.Open("vpn1")
