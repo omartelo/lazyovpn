@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Connecting with username/password now fails with a clear error when
+  `XDG_RUNTIME_DIR` is not set, instead of writing the credentials file to a
+  possibly disk-backed temp dir — passwords never touch durable storage.
 - Switching connections no longer tears the current tunnel down when the new
   connection fails during setup (credentials file, pty): the previous openvpn
   is stopped only once the new one is ready to start.

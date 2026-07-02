@@ -186,7 +186,9 @@ func HasDaemon(c Config) (bool, error) {
 func writeCredsFile(username, password string) (string, error) {
 	dir := os.Getenv("XDG_RUNTIME_DIR") // tmpfs, user-owned (/run/user/UID)
 	if dir == "" {
-		dir = os.TempDir()
+		// No user runtime dir means no guaranteed tmpfs — os.TempDir() may be
+		// disk-backed, and passwords never touch durable storage.
+		return "", fmt.Errorf("XDG_RUNTIME_DIR not set: no tmpfs to hold credentials")
 	}
 	f, err := os.CreateTemp(dir, "lazyovpn-auth-*")
 	if err != nil {

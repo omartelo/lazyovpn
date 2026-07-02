@@ -285,6 +285,19 @@ func TestConnectStartErrorRemovesCreds(t *testing.T) {
 	}
 }
 
+// Without XDG_RUNTIME_DIR there is no guaranteed tmpfs, and os.TempDir() may be
+// disk-backed — Connect must refuse to write the password there (passwords
+// never touch durable storage) instead of falling back.
+func TestConnectRefusesCredsWithoutRuntimeDir(t *testing.T) {
+	swap(t, fakeExec("echo")) // backstop: a wrongly-spawned process is fake, not pkexec
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	cfg := writeConfig(t, "client\nauth-user-pass\n")
+
+	if _, err := NewManager().Connect(cfg, "alice", "s3cret"); err == nil {
+		t.Fatal("Connect: want error without XDG_RUNTIME_DIR, got nil")
+	}
+}
+
 // A switch whose setup fails (creds file unwritable here) must leave the
 // previous connection running: the old tunnel is torn down only once the new
 // connection is ready to start, so a failed switch doesn't kill it for nothing.

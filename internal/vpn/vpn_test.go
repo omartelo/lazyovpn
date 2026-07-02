@@ -207,18 +207,15 @@ func TestWriteCredsFile(t *testing.T) {
 	}
 }
 
-// With no XDG_RUNTIME_DIR set, writeCredsFile falls back to the system temp dir
-// so a connection can still authenticate.
-func TestWriteCredsFileFallback(t *testing.T) {
+// With no XDG_RUNTIME_DIR there is no guaranteed tmpfs: writeCredsFile must
+// refuse rather than fall back to a possibly disk-backed os.TempDir() —
+// passwords never touch durable storage.
+func TestWriteCredsFileRefusesWithoutRuntimeDir(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 
 	path, err := writeCredsFile("alice", "s3cret")
-	if err != nil {
-		t.Fatalf("writeCredsFile error: %v", err)
-	}
-	defer os.Remove(path)
-
-	if dir := filepath.Dir(path); dir != os.TempDir() {
-		t.Errorf("fallback creds file in %q, want system temp %q", dir, os.TempDir())
+	if err == nil {
+		os.Remove(path)
+		t.Fatalf("writeCredsFile wrote %q without XDG_RUNTIME_DIR, want refusal", path)
 	}
 }
