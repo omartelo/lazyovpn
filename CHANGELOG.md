@@ -18,8 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An operation error while a tunnel is live (a failed delete of a root-owned
   config, an unreadable config on connect) no longer repaints the connection
   badge to "error" or silently disables auto-reconnect for the live tunnel.
-  The message now shows in the status line next to the real connection state,
-  and clears when a new action supersedes it or the tunnel comes (back) up.
+  The message now shows in the status line next to the real connection state
+  and the live connection's name, and clears when a new action or any
+  connection state change supersedes it.
+- An auto-reconnect attempt that fails to start (credentials no longer
+  writable, config gone) now settles to an error instead of showing
+  "reconnecting…" forever with no retry pending.
 
 ## [0.8.0] - 2026-07-01
 

@@ -762,6 +762,42 @@ func TestReconnectFireGivesUpWithoutKeyring(t *testing.T) {
 	}
 }
 
+// A redial whose Connect fails (creds unwritable, config gone) settles instead
+// of leaving the badge stuck on "reconnecting…" with no retry pending — nothing
+// else would ever fire (no stream, no timer, state poll gated on connecting).
+func TestReconnectFireFailedRedialSettles(t *testing.T) {
+	keyring.MockInit()
+	cfg := writeTempConfig(t, "secured", "client\nauth-user-pass\n")
+	if err := vpn.SaveCreds(cfg.Name, "bob", "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "") // creds write refused -> Connect fails, no spawn
+
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.StartConnection(cfg.Name)
+	m.log.MarkReconnecting(1) // -> StateReconnecting
+	m.reCfg = cfg
+	m.reArmed = true
+	m.logCh = nil
+
+	out, cmd := m.Update(reconnectMsg{})
+	mm := out.(*UI)
+	if cmd != nil {
+		t.Error("failed redial issued a command (spawned openvpn)")
+	}
+	if mm.log.State() != StateError {
+		t.Errorf("state = %v after failed redial, want StateError (settled)", mm.log.State())
+	}
+	if mm.log.Err() == "" {
+		t.Error("failed redial lost its error message")
+	}
+	if mm.reArmed {
+		t.Error("reArmed still set after a failed redial settled")
+	}
+}
+
 // An operation error while a tunnel is live (a failed delete, an unreadable
 // config on enter) must not repaint the badge or disable auto-reconnect: the
 // state stays connected and a later real drop still schedules the redial.
@@ -784,12 +820,16 @@ func TestOpErrorWhileConnectedKeepsReconnect(t *testing.T) {
 }
 
 // statusLine surfaces an operation error even while the badge shows a live
-// connection — the message must not stay invisible until the tunnel ends.
+// connection — and keeps showing which connection is live next to it.
 func TestStatusLineShowsOpErrorWhileConnected(t *testing.T) {
 	m, _ := armedConnected(t, "alpha")
 	m.log.SetError("boom")
-	if got := m.statusLine(); !strings.Contains(got, "boom") {
+	got := m.statusLine()
+	if !strings.Contains(got, "boom") {
 		t.Errorf("statusLine = %q, want it to contain the op error", got)
+	}
+	if !strings.Contains(got, "alpha") {
+		t.Errorf("statusLine = %q, want the live connection name alongside the error", got)
 	}
 }
 
@@ -1072,6 +1112,29 @@ func TestDeleteConfirmRemovesEverything(t *testing.T) {
 	}
 	if cfg, ok := mm.sidebar.SelectedConfig(); !ok || cfg.Name != "keep" {
 		t.Errorf("selected = %+v ok=%v, want keep", cfg, ok)
+	}
+}
+
+// A successful delete supersedes a stale operation error — the old message must
+// not survive into the post-delete status line.
+func TestDeleteClearsStaleError(t *testing.T) {
+	keyring.MockInit()
+	path := filepath.Join(t.TempDir(), "gone.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "gone", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+	m.log.SetError("boom")
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // confirm
+
+	if got := out.(*UI).log.Err(); got != "" {
+		t.Errorf("Err() = %q after a successful delete, want cleared", got)
 	}
 }
 

@@ -125,7 +125,9 @@ func (l *Log) MarkConnected() {
 	l.errMsg = ""
 }
 
-// MarkClosed records that the active stream ended (process exited).
+// MarkClosed records that the active stream ended (process exited). Like every
+// state transition, it supersedes a stale operation error — otherwise the old
+// message would read as the reason the connection ended.
 func (l *Log) MarkClosed() {
 	if b := l.buffers[l.activeName]; b != nil {
 		b.WriteString("\n[process exited]\n")
@@ -135,6 +137,7 @@ func (l *Log) MarkClosed() {
 	}
 	l.activeName = ""
 	l.state = StateDisconnected
+	l.errMsg = ""
 }
 
 // MarkReconnecting notes the live tunnel dropped and is being auto-redialed
@@ -148,12 +151,16 @@ func (l *Log) MarkReconnecting(n int) {
 		}
 	}
 	l.state = StateReconnecting
+	l.errMsg = "" // the transition supersedes a stale operation error
 }
 
-// MarkDisconnected enters the disconnected state (user-initiated).
+// MarkDisconnected enters the disconnected state (user-initiated). The
+// transition supersedes a stale operation error — it must not read as the
+// reason for the disconnect.
 func (l *Log) MarkDisconnected() {
 	l.activeName = ""
 	l.state = StateDisconnected
+	l.errMsg = ""
 }
 
 // SetError records msg, flipping the badge to the error state only when no
@@ -171,8 +178,15 @@ func (l *Log) SetError(msg string) {
 	}
 }
 
-// ClearError drops a stale operation error — a new action supersedes it.
-func (l *Log) ClearError() { l.errMsg = "" }
+// ClearError drops a stale operation error — a new action supersedes it. When
+// the error owned the badge, the badge settles back to idle too: a bare "error"
+// with no message behind it would leave nothing to act on.
+func (l *Log) ClearError() {
+	l.errMsg = ""
+	if l.state == StateError {
+		l.state = StateIdle
+	}
+}
 
 // ShowBuffer renders connection name's output into the viewport (placeholder if empty).
 func (l *Log) ShowBuffer(name string) {

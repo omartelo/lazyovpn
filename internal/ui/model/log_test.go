@@ -138,19 +138,51 @@ func TestLogSetError(t *testing.T) {
 	}
 }
 
-// The tunnel coming up supersedes a stale operation error, and ClearError drops
-// one when a new action does.
+// Every state transition supersedes a stale operation error — an old message
+// left behind would read as the reason for the new state (e.g. a failed delete
+// presented as why the tunnel closed).
 func TestLogErrorClearing(t *testing.T) {
-	term := newSizedLog()
-	term.SetError("boom")
-	term.MarkConnected()
-	if term.Err() != "" {
-		t.Errorf("Err() = %q after MarkConnected, want cleared", term.Err())
+	tests := []struct {
+		name       string
+		transition func(*Log)
+	}{
+		{"MarkConnected", func(l *Log) { l.MarkConnected() }},
+		{"MarkClosed", func(l *Log) { l.MarkClosed() }},
+		{"MarkDisconnected", func(l *Log) { l.MarkDisconnected() }},
+		{"MarkReconnecting", func(l *Log) { l.MarkReconnecting(1) }},
+		{"StartConnection", func(l *Log) { l.StartConnection("alpha") }},
+		{"ClearError", func(l *Log) { l.ClearError() }},
 	}
-	term.SetError("boom again")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			term := newSizedLog()
+			term.state = StateConnected // a live tunnel keeps the badge on SetError
+			term.SetError("boom")
+			tt.transition(&term)
+			if term.Err() != "" {
+				t.Errorf("Err() = %q after %s, want cleared", term.Err(), tt.name)
+			}
+		})
+	}
+}
+
+// ClearError on an error that owns the badge settles the badge back to idle —
+// a bare "error" badge with no message behind it leaves nothing to act on. A
+// live connection's badge is untouched.
+func TestLogClearErrorSettlesBadge(t *testing.T) {
+	term := newSizedLog()
+	term.SetError("boom") // idle -> StateError
 	term.ClearError()
-	if term.Err() != "" {
-		t.Errorf("Err() = %q after ClearError, want cleared", term.Err())
+	if term.State() != StateIdle {
+		t.Errorf("State() = %v after ClearError, want StateIdle", term.State())
+	}
+
+	term = newSizedLog()
+	term.state = StateConnected
+	term.SetError("boom") // badge stays connected
+	term.ClearError()
+	if term.State() != StateConnected {
+		t.Errorf("State() = %v after ClearError while connected, want StateConnected", term.State())
 	}
 }
 
