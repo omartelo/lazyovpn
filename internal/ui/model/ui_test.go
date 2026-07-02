@@ -286,6 +286,7 @@ func TestEnterWhileConnectedIsNoOp(t *testing.T) {
 	m.log.StartConnection("alpha") // -> StateConnecting, active = alpha
 	ch := make(chan string)
 	m.logCh = ch
+	m.reAttempts = 2 // a spent retry budget the no-op must not touch
 
 	out, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	mm := out.(*UI)
@@ -297,6 +298,15 @@ func TestEnterWhileConnectedIsNoOp(t *testing.T) {
 	}
 	if mm.log.State() != StateConnecting {
 		t.Errorf("state = %v after enter, want unchanged StateConnecting (no reconnect)", mm.log.State())
+	}
+	// A true no-op stops before the connect path: the retry budget keeps its
+	// value and no operation error is recorded (the config's path is unreadable,
+	// so falling through would surface a NeedsAuth error).
+	if mm.reAttempts != 2 {
+		t.Errorf("reAttempts = %d after no-op enter, want 2 (untouched)", mm.reAttempts)
+	}
+	if mm.log.Err() != "" {
+		t.Errorf("Err() = %q after no-op enter, want empty (connect path must not run)", mm.log.Err())
 	}
 }
 
@@ -684,7 +694,20 @@ func TestStatePollReschedulesWhileConnecting(t *testing.T) {
 
 	_, cmd := m.Update(statePollMsg{})
 	if cmd == nil {
-		t.Error("poll tick while connecting returned no cmd — polling stopped early")
+		t.Fatal("poll tick while connecting returned no cmd — polling stopped early")
+	}
+	// With no socket yet the cmd must be the reschedule tick, not a query: a
+	// query resolves (to a stateResultMsg) immediately, the tick only after
+	// statePollInterval.
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		if _, ok := msg.(stateResultMsg); ok {
+			t.Error("poll tick with no socket queried the state instead of rescheduling")
+		}
+	case <-time.After(150 * time.Millisecond):
+		// still pending — the tick, as wanted
 	}
 }
 
@@ -698,6 +721,29 @@ func TestStatePollStopsWhenNotConnecting(t *testing.T) {
 	_, cmd := m.Update(statePollMsg{})
 	if cmd != nil {
 		t.Error("poll tick with no live connection returned a cmd — should stop")
+	}
+}
+
+// syncConnected mirrors the log state into the shared field the sidebar's ●
+// marker reads: the active name while connected, empty in any other state.
+func TestSyncConnected(t *testing.T) {
+	m := connectingUI(t, "alpha")
+
+	m.syncConnected() // still connecting
+	if got := m.sh.connected; got != "" {
+		t.Errorf("sh.connected = %q while connecting, want empty", got)
+	}
+
+	m.log.MarkConnected()
+	m.syncConnected()
+	if got := m.sh.connected; got != "alpha" {
+		t.Errorf("sh.connected = %q while connected, want alpha", got)
+	}
+
+	m.log.MarkDisconnected()
+	m.syncConnected()
+	if got := m.sh.connected; got != "" {
+		t.Errorf("sh.connected = %q after disconnect, want empty", got)
 	}
 }
 

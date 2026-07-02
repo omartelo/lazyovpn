@@ -225,6 +225,62 @@ func TestConnectWritesCredsAndRemovesOnExit(t *testing.T) {
 	}
 }
 
+// A management socket openvpn left behind (a non-clean exit does not unlink it)
+// is removed when the connection ends, like the creds file — no stale sockets
+// accumulating in the runtime dir.
+func TestConnectRemovesMgmtSocketOnExit(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	swap(t, fakeExec("sleep"))
+	cfg := writeConfig(t, "client\n")
+
+	m := NewManager()
+	ch, err := m.Connect(cfg, "", "")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	sock := m.MgmtSock()
+	if sock == "" {
+		t.Fatal("Connect reserved no management socket path")
+	}
+	// The fake openvpn never binds the socket; plant a file there to play the
+	// leftover a killed openvpn leaves.
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Disconnect(); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	drain(t, ch) // the deferred cleanup runs before the channel closes
+
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Errorf("management socket %s still exists after connection ended (stat err: %v)", sock, err)
+	}
+}
+
+// mgmtSocketPath honors XDG_RUNTIME_DIR (tmpfs, user-owned) and falls back to
+// the system temp dir only when it is unset.
+func TestMgmtSocketPath(t *testing.T) {
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	p, err := mgmtSocketPath()
+	if err != nil {
+		t.Fatalf("mgmtSocketPath: %v", err)
+	}
+	if filepath.Dir(p) != runtimeDir {
+		t.Errorf("socket path %q not under XDG_RUNTIME_DIR %q", p, runtimeDir)
+	}
+
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	p, err = mgmtSocketPath()
+	if err != nil {
+		t.Fatalf("mgmtSocketPath: %v", err)
+	}
+	if filepath.Dir(p) != filepath.Clean(os.TempDir()) {
+		t.Errorf("socket path %q not under the temp-dir fallback %q", p, os.TempDir())
+	}
+}
+
 // Disconnect must kill the process and let the reaper close the channel — and do
 // it with exactly one cmd.Wait (a second would panic, failing the test).
 func TestConnectKillTearsDown(t *testing.T) {
@@ -457,6 +513,32 @@ func TestQueryStateReturnsCurrent(t *testing.T) {
 
 	if got := QueryState(sock); got != "CONNECTED" {
 		t.Errorf("QueryState = %q, want CONNECTED (latest row)", got)
+	}
+}
+
+// A minimal state row — exactly "<unixtime>,<STATE>" with no trailing fields —
+// still counts: the parser accepts any row with at least two fields.
+func TestQueryStateMinimalRow(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		fmt.Fprint(c, ">INFO:OpenVPN Management Interface Version 5\r\n")
+		bufio.NewReader(c).ReadString('\n') // the "state" request
+		fmt.Fprint(c, "1700000000,CONNECTED\r\nEND\r\n")
+	}()
+
+	if got := QueryState(sock); got != "CONNECTED" {
+		t.Errorf("QueryState = %q, want CONNECTED (two-field row accepted)", got)
 	}
 }
 
