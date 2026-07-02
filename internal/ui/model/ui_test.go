@@ -1272,3 +1272,125 @@ func TestDeleteFailureKeepsConnection(t *testing.T) {
 		t.Errorf("state = %v after a failed delete, want StateError", mm.log.State())
 	}
 }
+
+// esc while the rename prompt is open cancels back to normal: the file keeps
+// its name, the sidebar entry is untouched, and the typed edit is dropped.
+func TestRenameEscCancels(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keep.ovpn")
+	if err := os.WriteFile(path, []byte("client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]vpn.Config{{Name: "keep", Path: path}}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})        // menu
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 'r', Text: "r"}) // rename
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "-nope"})        // edit
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEsc})     // cancel
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after esc, want modeNormal", mm.mode)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file renamed despite cancel: %v", err)
+	}
+	if cfg, _ := mm.sidebar.SelectedConfig(); cfg.Name != "keep" {
+		t.Errorf("sidebar name = %q after cancel, want keep", cfg.Name)
+	}
+}
+
+// The rename flow with nothing selected (empty list) backs out to normal mode
+// instead of opening a prompt for a connection that does not exist. Both the
+// open and the confirm guard are exercised directly — the menu key path cannot
+// reach them (the menu refuses to open with no selection).
+func TestRenameNoSelectionBacksOut(t *testing.T) {
+	m := New(nil, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, cmd := m.openRename()
+	if mode := out.(*UI).mode; mode != modeNormal {
+		t.Errorf("mode = %v after openRename with no selection, want modeNormal", mode)
+	}
+	if cmd != nil {
+		t.Error("openRename with no selection returned a command")
+	}
+
+	m.mode = modeRename // force the prompt open, then confirm with no selection
+	out, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if mode := out.(*UI).mode; mode != modeNormal {
+		t.Errorf("mode = %v after confirm with no selection, want modeNormal", mode)
+	}
+}
+
+// Submitting the credential modal with the save toggle on stores the creds in
+// the keyring, hands them to connect, and clears the fields. Connect is forced
+// to fail before spawning anything (XDG_RUNTIME_DIR unset refuses the creds
+// temp file), so the flow is exercised without openvpn.
+func TestAuthSubmitSavesCredsAndClears(t *testing.T) {
+	keyring.MockInit()
+	cfg := writeTempConfig(t, "secured", "client\nauth-user-pass\n")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // open the modal
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "bob"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "s3cret"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}) // save on
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter})          // submit
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after submit, want modeNormal", mm.mode)
+	}
+	user, pass, has, err := vpn.LoadCreds("secured")
+	if err != nil || !has {
+		t.Fatalf("LoadCreds: has=%v err=%v, want saved creds", has, err)
+	}
+	if user != "bob" || pass != "s3cret" {
+		t.Errorf("saved creds = %q/%q, want bob/s3cret", user, pass)
+	}
+	if mm.creds.Username() != "" || mm.creds.Password() != "" {
+		t.Error("modal fields not cleared after submit")
+	}
+	if mm.log.Err() == "" {
+		t.Error("failed connect after submit surfaced no error")
+	}
+}
+
+// Without the save toggle, submitting connects but writes nothing to the
+// keyring — persistence is strictly opt-in.
+func TestAuthSubmitWithoutToggleSavesNothing(t *testing.T) {
+	keyring.MockInit()
+	cfg := writeTempConfig(t, "secured", "client\nauth-user-pass\n")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	m := New([]vpn.Config{cfg}, vpn.NewManager())
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = sized.(*UI)
+
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // open the modal
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "bob"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Text: "s3cret"})
+	out, _ = out.(*UI).Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // submit
+	mm := out.(*UI)
+
+	if mm.mode != modeNormal {
+		t.Fatalf("mode = %v after submit, want modeNormal", mm.mode)
+	}
+	if _, _, has, _ := vpn.LoadCreds("secured"); has {
+		t.Error("creds saved to the keyring without the opt-in toggle")
+	}
+	if mm.creds.Username() != "" || mm.creds.Password() != "" {
+		t.Error("modal fields not cleared after submit")
+	}
+}
