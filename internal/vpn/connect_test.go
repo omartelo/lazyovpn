@@ -192,7 +192,7 @@ func TestConnectGivesChildATTY(t *testing.T) {
 
 // The whole reason creds go to tmpfs: written for the process, gone when it ends.
 // This proves the file is created, passed to openvpn with the right content, and
-// removed once the connection closes (hard invariant: no plaintext left behind).
+// removed once the connection closes — no plaintext left behind.
 func TestConnectWritesCredsAndRemovesOnExit(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	swap(t, fakeExec("creds"))
@@ -283,6 +283,58 @@ func TestConnectStartErrorRemovesCreds(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("creds file leaked after start failure: %v", entries)
 	}
+}
+
+// Without XDG_RUNTIME_DIR there is no guaranteed tmpfs, and os.TempDir() may be
+// disk-backed — Connect must refuse to write the password there (passwords
+// never touch durable storage) instead of falling back.
+func TestConnectRefusesCredsWithoutRuntimeDir(t *testing.T) {
+	swap(t, fakeExec("echo")) // backstop: a wrongly-spawned process is fake, not pkexec
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	cfg := writeConfig(t, "client\nauth-user-pass\n")
+
+	if _, err := NewManager().Connect(cfg, "alice", "s3cret"); err == nil {
+		t.Fatal("Connect: want error without XDG_RUNTIME_DIR, got nil")
+	}
+}
+
+// A switch whose setup fails (creds file unwritable here) must leave the
+// previous connection running: the old tunnel is torn down only once the new
+// connection is ready to start, so a failed switch doesn't kill it for nothing.
+func TestFailedConnectKeepsPrevious(t *testing.T) {
+	swap(t, fakeExec("sleep"))
+	cfg := writeConfig(t, "client\nauth-user-pass\n")
+
+	m := NewManager()
+	ch1, err := m.Connect(cfg, "", "")
+	if err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	// Drain the helper's two banner lines; it then stays alive until killed.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ch1:
+		case <-time.After(10 * time.Second):
+			t.Fatal("first connection produced no output")
+		}
+	}
+
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "missing")) // creds write fails
+	if _, err := m.Connect(cfg, "alice", "s3cret"); err == nil {
+		t.Fatal("second Connect: want setup error, got nil")
+	}
+
+	select {
+	case _, ok := <-ch1:
+		if !ok {
+			t.Fatal("failed second Connect tore down the first connection")
+		}
+		t.Fatal("unexpected extra output from the first connection")
+	case <-time.After(100 * time.Millisecond):
+		// channel still open — the first connection survived the failed switch
+	}
+	_ = m.Disconnect()
+	drain(t, ch1)
 }
 
 // If the credentials file cannot be written, Connect fails before spawning

@@ -118,12 +118,16 @@ func (l *Log) Scroll(msg tea.Msg) tea.Cmd {
 }
 
 // MarkConnected enters the connected state — the tunnel is up. Driven by the
-// management state poll (vpn.QueryState), not by log content.
+// management state poll (vpn.QueryState), not by log content. A stale operation
+// error is superseded by the tunnel coming up.
 func (l *Log) MarkConnected() {
 	l.state = StateConnected
+	l.errMsg = ""
 }
 
-// MarkClosed records that the active stream ended (process exited).
+// MarkClosed records that the active stream ended (process exited). Like every
+// state transition, it supersedes a stale operation error — otherwise the old
+// message would read as the reason the connection ended.
 func (l *Log) MarkClosed() {
 	if b := l.buffers[l.activeName]; b != nil {
 		b.WriteString("\n[process exited]\n")
@@ -133,6 +137,7 @@ func (l *Log) MarkClosed() {
 	}
 	l.activeName = ""
 	l.state = StateDisconnected
+	l.errMsg = ""
 }
 
 // MarkReconnecting notes the live tunnel dropped and is being auto-redialed
@@ -146,18 +151,41 @@ func (l *Log) MarkReconnecting(n int) {
 		}
 	}
 	l.state = StateReconnecting
+	l.errMsg = "" // the transition supersedes a stale operation error
 }
 
-// MarkDisconnected enters the disconnected state (user-initiated).
+// MarkDisconnected enters the disconnected state (user-initiated). The
+// transition supersedes a stale operation error — it must not read as the
+// reason for the disconnect.
 func (l *Log) MarkDisconnected() {
 	l.activeName = ""
 	l.state = StateDisconnected
+	l.errMsg = ""
 }
 
-// SetError enters the error state with a message.
+// SetError records msg, flipping the badge to the error state only when no
+// active connection owns it. An operation error (failed delete, unreadable
+// config) while a tunnel is live/coming up/redialing must not repaint the badge
+// or derail the state machine keyed on it (state poll, auto-reconnect); the
+// message still surfaces in the status line.
 func (l *Log) SetError(msg string) {
-	l.state = StateError
 	l.errMsg = msg
+	switch l.state {
+	case StateConnecting, StateConnected, StateReconnecting:
+		// the live connection keeps its badge
+	default:
+		l.state = StateError
+	}
+}
+
+// ClearError drops a stale operation error — a new action supersedes it. When
+// the error owned the badge, the badge settles back to idle too: a bare "error"
+// with no message behind it would leave nothing to act on.
+func (l *Log) ClearError() {
+	l.errMsg = ""
+	if l.state == StateError {
+		l.state = StateIdle
+	}
 }
 
 // ShowBuffer renders connection name's output into the viewport (placeholder if empty).
